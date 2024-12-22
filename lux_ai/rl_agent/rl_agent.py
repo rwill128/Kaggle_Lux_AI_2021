@@ -1,3 +1,20 @@
+"""
+Core reinforcement learning agent implementation for the Lux AI competition.
+This module implements a sophisticated RL agent that uses a neural network to control
+multiple units simultaneously in the Lux AI game environment.
+
+Key Features:
+1. Single neural network controlling all units (workers, carts, and city tiles)
+2. Data augmentation for improved generalization
+3. Sophisticated collision detection and action resolution
+4. Integration with IMPALA distributed training framework
+5. Support for teacher model knowledge distillation
+
+The agent uses a 24-block ResNet with squeeze-excitation layers to process the game
+state and output actions for all units simultaneously. The network is trained using
+the IMPALA algorithm with V-trace for off-policy correction and UPGO/TD-lambda losses.
+"""
+
 import numpy as np
 import os
 from pathlib import Path
@@ -29,11 +46,57 @@ os.environ["OMP_NUM_THREADS"] = "1"
 
 
 def pos_to_loc(pos: Tuple[int, int], board_dims: Tuple[int, int] = MAX_BOARD_SIZE) -> int:
+    """
+    Converts a 2D board position to a 1D location index.
+    
+    This function is used to map 2D game board coordinates to flat indices for
+    efficient storage and lookup in dictionaries/arrays.
+    
+    Args:
+        pos (Tuple[int, int]): (x, y) coordinates on the game board
+        board_dims (Tuple[int, int], optional): Board dimensions. Defaults to MAX_BOARD_SIZE.
+        
+    Returns:
+        int: Flattened 1D index corresponding to the input position
+    """
     return pos[0] * board_dims[1] + pos[1]
 
 
 class RLAgent:
+    """
+    Reinforcement learning agent for the Lux AI competition.
+    
+    This class implements a sophisticated RL agent that uses a neural network to
+    control multiple units simultaneously. The agent processes game state observations
+    through a 24-block ResNet with squeeze-excitation layers to generate actions
+    for all units.
+    
+    Key Features:
+    1. Data augmentation for improved generalization
+    2. Collision detection to prevent illegal moves
+    3. Support for both worker and cart units
+    4. City tile management and research prioritization
+    5. Optional teacher model knowledge distillation
+    
+    The agent is trained using the IMPALA algorithm with V-trace for off-policy
+    correction and UPGO/TD-lambda losses for stable learning.
+    """
+    
     def __init__(self, obs, conf):
+        """
+        Initializes the RL agent with model and environment configurations.
+        
+        Args:
+            obs: Initial game observation containing player state and updates
+            conf: Game configuration parameters
+            
+        The initialization process:
+        1. Loads model and agent configurations
+        2. Sets up the environment with proper wrappers
+        3. Loads the trained neural network model
+        4. Initializes data augmentation pipeline
+        5. Sets up game state tracking
+        """
         with open(MODEL_CONFIG_PATH, 'r') as f:
             self.model_flags = flags_to_namespace(yaml.safe_load(f))
         with open(RL_AGENT_CONFIG_PATH, 'r') as f:
@@ -96,6 +159,27 @@ class RLAgent:
         self.stopwatch = Stopwatch()
 
     def __call__(self, obs, conf, raw_model_output: bool = False):
+        """
+        Processes game observations and returns actions for all units.
+        
+        This is the main inference loop that:
+        1. Processes new observations
+        2. Applies data augmentation
+        3. Runs neural network inference
+        4. Resolves potential unit collisions
+        5. Returns final actions
+        
+        Args:
+            obs: Current game observation
+            conf: Game configuration
+            raw_model_output (bool): If True, returns raw network outputs for debugging
+            
+        Returns:
+            list: List of actions for all units, or raw model outputs if raw_model_output=True
+            
+        The process uses the trained neural network to generate actions, then applies
+        sophisticated collision detection to ensure all actions are legal and optimal.
+        """
         self.stopwatch.reset()
 
         self.stopwatch.start("Observation processing")
@@ -154,6 +238,22 @@ class RLAgent:
         return actions
 
     def preprocess(self, obs, conf) -> NoReturn:
+        """
+        Prepares the game state for neural network processing.
+        
+        This method:
+        1. Updates internal game state
+        2. Identifies actionable units and city tiles
+        3. Updates unit location mappings
+        4. Manages data augmentation based on remaining computation time
+        
+        Args:
+            obs: Current game observation
+            conf: Game configuration
+            
+        The preprocessing ensures efficient lookup of units and city tiles during
+        action selection and collision detection.
+        """
         # Do not call manual_step on the first turn, or you will be off-by-1 turn the entire game
         if obs["step"] > 0:
             self.unwrapped_env.manual_step(obs["updates"])
@@ -191,6 +291,15 @@ class RLAgent:
             del self.data_augmentations[-1]
 
     def get_env_output(self) -> Dict:
+        """
+        Gets the current environment state after preprocessing.
+        
+        Returns:
+            Dict: Environment output containing observations and available action masks
+            
+        This method steps the environment with placeholder actions to get the
+        current state representation without actually taking any actions.
+        """
         return self.env.step(self.action_placeholder)
 
     def augment_data(
@@ -198,6 +307,24 @@ class RLAgent:
             data: Union[torch.Tensor, Dict[str, torch.Tensor]],
             is_policy: bool
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Applies data augmentation to improve model generalization.
+        
+        This method applies multiple transformations to the input data (like rotations
+        and reflections) to help the model learn invariant features. The augmentations
+        are applied differently for policy outputs vs state observations.
+        
+        Args:
+            data: Input tensor or dictionary of tensors to augment
+            is_policy: Whether the data represents policy outputs (True) or
+                      observations (False)
+            
+        Returns:
+            Augmented data with all transformations applied and concatenated
+            
+        The augmentations help the model learn that game states are equivalent
+        under various transformations, improving generalization.
+        """
         """
         Applies and concatenates all augmented observations into a single tensor/dict of tensors and moves the tensor
         to the correct device for inference.
@@ -216,6 +343,23 @@ class RLAgent:
 
     def aggregate_augmented_predictions(self, policy: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
+        Combines predictions from multiple data augmentations.
+        
+        This method:
+        1. Moves predictions to CPU
+        2. Applies inverse transformations to align predictions
+        3. Averages aligned predictions for each action
+        
+        Args:
+            policy: Dictionary of policy logits from the neural network
+            
+        Returns:
+            Dictionary of averaged policy logits after inverse transformations
+            
+        The aggregation ensures that predictions from different augmented views
+        are properly aligned before being combined, improving prediction stability.
+        """
+        """
         Moves the predictions to the cpu, applies the inverse of all augmentations,
         and then returns the mean prediction for each available action.
         """
@@ -233,6 +377,26 @@ class RLAgent:
         }
 
     def resolve_collision_detection(self, obs, agent_output) -> List[str]:
+        """
+        Resolves potential collisions between unit actions using a priority system.
+        
+        This sophisticated collision detection system:
+        1. Prioritizes actions based on their log probabilities
+        2. Ensures city tiles don't exceed unit/research caps
+        3. Prevents units from moving to the same square
+        4. Handles edge cases like map boundaries
+        
+        Args:
+            obs: Current game observation
+            agent_output: Raw neural network outputs including policy logits
+            
+        Returns:
+            List[str]: Final list of collision-free actions for all units
+            
+        The method uses a priority queue based on action probabilities to resolve
+        conflicts, ensuring that high-priority actions are executed first while
+        maintaining game rules and constraints.
+        """
         # Get log_probs for all of my actions
         flat_log_probs = {
             key: torch.flatten(
@@ -364,6 +528,22 @@ class RLAgent:
         return actions
 
     def get_transfer_annotations(self, actions: List[str]) -> List[str]:
+        """
+        Generates visualization annotations for resource transfers between units.
+        
+        This method creates visual indicators (lines and X marks) to show resource
+        transfers between units in the game visualization, helping with debugging
+        and understanding agent behavior.
+        
+        Args:
+            actions: List of action strings to process for transfer annotations
+            
+        Returns:
+            List of annotation commands for visualizing transfers
+            
+        The annotations help visualize resource movement between units, which is
+        crucial for understanding the agent's resource management strategy.
+        """
         annotations = []
         for act in actions:
             act_split = act.split(" ")
@@ -379,19 +559,69 @@ class RLAgent:
 
     @property
     def unwrapped_env(self) -> LuxEnv:
+        """
+        Provides access to the underlying Lux environment without wrappers.
+        
+        Returns:
+            LuxEnv: The base environment instance without any wrappers
+            
+        This property is used to access low-level environment functionality
+        like action processing and game state management.
+        """
         return self.env.unwrapped[0]
 
     @property
     def game_state(self) -> Game:
+        """
+        Provides access to the current game state.
+        
+        Returns:
+            Game: Current game state instance containing all game information
+            
+        This property gives direct access to the game state for checking unit
+        positions, resources, and other game-specific information.
+        """
         return self.unwrapped_env.game_state
 
     # Helper functions for debugging
     def set_to_turn_and_call(self, turn: int, *args, **kwargs):
+        """
+        Helper method for debugging specific game turns.
+        
+        Args:
+            turn: Game turn to set before calling the agent
+            *args: Additional arguments to pass to __call__
+            **kwargs: Additional keyword arguments to pass to __call__
+            
+        Returns:
+            The result of calling the agent at the specified turn
+            
+        This method is primarily used for debugging and analyzing agent
+        behavior at specific points in the game.
+        """
         self.game_state.turn = max(turn - 1, 0)
         return self(*args, **kwargs)
 
 
 def agent(obs, conf) -> List[str]:
+    """
+    Main entry point for the Lux AI agent, implementing the competition interface.
+    
+    This function:
+    1. Creates the RLAgent instance if needed (first call)
+    2. Processes the current observation
+    3. Returns actions for all units
+    
+    Args:
+        obs: Current game observation from the environment
+        conf: Game configuration parameters
+        
+    Returns:
+        List[str]: List of actions for all units in the required format
+        
+    The function maintains a single global agent instance across turns to preserve
+    state and improve efficiency.
+    """
     global AGENT
     if AGENT is None:
         AGENT = RLAgent(obs, conf)

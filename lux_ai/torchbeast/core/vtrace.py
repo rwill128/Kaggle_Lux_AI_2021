@@ -16,15 +16,35 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Functions to compute V-trace off-policy actor critic targets.
+"""V-trace implementation for off-policy correction in distributed RL training.
 
-For details and theory see:
+This module implements the V-trace algorithm from the IMPALA paper:
+"IMPALA: Scalable Distributed Deep-RL with Importance Weighted Actor-Learner Architectures"
+by Espeholt, Soyer, Munos et al. (https://arxiv.org/abs/1802.01561)
 
-"IMPALA: Scalable Distributed Deep-RL with
-Importance Weighted Actor-Learner Architectures"
-by Espeholt, Soyer, Munos et al.
+Role in Lux AI Training:
+1. Off-Policy Correction:
+   - Handles differences between behavior policy (actors) and target policy (learner)
+   - Enables stable learning from old trajectories in replay buffer
+   - Corrects for policy lag in distributed training setup
 
-See https://arxiv.org/abs/1802.01561 for the full paper.
+2. Importance Sampling:
+   - Uses clipped importance weights to reduce variance
+   - Balances bias-variance tradeoff for stable updates
+   - Prevents excessive influence from outlier trajectories
+
+3. Value Estimation:
+   - Computes corrected value targets for critic training
+   - Provides policy gradient advantages for actor training
+   - Maintains temporal consistency through bootstrapping
+
+Key Parameters:
+- clip_rho_threshold: Controls maximum importance weight for value estimation
+- clip_pg_rho_threshold: Controls maximum importance weight for policy gradient
+- discounts: Time discounting for future rewards
+- bootstrap_value: Value estimate for terminal states
+
+Implementation adapted from DeepMind's scalable_agent repository.
 """
 
 import collections
@@ -48,6 +68,24 @@ VTraceReturns = collections.namedtuple("VTraceReturns", "vs pg_advantages")
 
 
 def action_log_probs(policy_logits, actions):
+    """Compute action log probabilities from policy logits.
+
+    Args:
+        policy_logits: Raw policy network outputs (batch_size, num_actions)
+        actions: Selected actions to compute probabilities for
+
+    Returns:
+        torch.Tensor: Log probabilities of selected actions
+
+    Implementation:
+    1. Applies softmax to convert logits to probabilities
+    2. Takes log of probabilities for selected actions
+    3. Reshapes output to match action tensor shape
+
+    Note:
+        Uses negative NLL loss as an efficient way to compute
+        log probabilities for specific actions from logits.
+    """
     return -F.nll_loss(
         F.log_softmax(policy_logits.view(-1, policy_logits.shape[-1]), dim=-1),
         torch.flatten(actions),
@@ -66,6 +104,31 @@ def from_logits(
         clip_rho_threshold=1.0,
         clip_pg_rho_threshold=1.0,
 ):
+    """Compute V-trace targets from raw policy network outputs.
+
+    Args:
+        behavior_policy_logits: Logits from behavior policy (actors)
+        target_policy_logits: Logits from target policy (learner)
+        actions: Actually executed actions in trajectory
+        discounts: Discount factors for future rewards
+        rewards: Immediate rewards received
+        values: Value estimates from critic network
+        bootstrap_value: Value estimate for terminal state
+        clip_rho_threshold: Max importance weight for value estimation
+        clip_pg_rho_threshold: Max importance weight for policy gradient
+
+    Returns:
+        VTraceFromLogitsReturns containing:
+        - vs: V-trace value targets
+        - pg_advantages: Policy gradient advantages
+        - log_rhos: Log importance weights
+        - behavior/target_action_log_probs: Action probabilities
+
+    Role in Training:
+    1. Converts raw network outputs to action probabilities
+    2. Computes importance weights between policies
+    3. Applies V-trace algorithm for off-policy correction
+    """
     """V-trace for softmax policies."""
 
     target_action_log_probs = action_log_probs(target_policy_logits, actions)
@@ -92,6 +155,30 @@ def from_action_log_probs(
         clip_rho_threshold=1.0,
         clip_pg_rho_threshold=1.0,
 ):
+    """Compute V-trace targets from action log probabilities.
+
+    Args:
+        behavior_action_log_probs: Log probs from behavior policy
+        target_action_log_probs: Log probs from target policy
+        discounts: Discount factors for future rewards
+        rewards: Immediate rewards received
+        values: Value estimates from critic network
+        bootstrap_value: Value estimate for terminal state
+        clip_rho_threshold: Max importance weight for value estimation
+        clip_pg_rho_threshold: Max importance weight for policy gradient
+
+    Returns:
+        VTraceFromLogitsReturns containing:
+        - vs: V-trace value targets
+        - pg_advantages: Policy gradient advantages
+        - log_rhos: Log importance weights
+        - behavior/target_action_log_probs: Action probabilities
+
+    Implementation:
+    1. Computes log importance weights (target - behavior)
+    2. Calls from_importance_weights for V-trace computation
+    3. Packages results with additional probability info
+    """
     log_rhos = target_action_log_probs - behavior_action_log_probs
     vtrace_returns = from_importance_weights(
         log_rhos=log_rhos,
@@ -120,7 +207,46 @@ def from_importance_weights(
         clip_rho_threshold=1.0,
         clip_pg_rho_threshold=1.0,
 ):
-    """V-trace from log importance weights."""
+    """Core V-trace implementation using importance sampling weights.
+
+    This function implements the key V-trace algorithm equations from the
+    IMPALA paper, computing corrected value targets and policy gradient
+    advantages using clipped importance sampling.
+
+    Args:
+        log_rhos: Log importance weights (target/behavior ratio)
+        discounts: Discount factors for future rewards
+        rewards: Immediate rewards received
+        values: Value estimates from critic network
+        bootstrap_value: Value estimate for terminal state
+        clip_rho_threshold: Max importance weight for value estimation
+        clip_pg_rho_threshold: Max importance weight for policy gradient
+
+    Returns:
+        VTraceReturns containing:
+        - vs: V-trace value targets
+        - pg_advantages: Policy gradient advantages
+
+    Implementation Details:
+    1. Importance Weight Clipping:
+       - Clamps rho_t for value estimation (clip_rho_threshold)
+       - Clamps c_t always at 1.0 (bias-variance tradeoff)
+       - Separate clipping for policy gradient (clip_pg_rho_threshold)
+
+    2. V-trace Target Computation:
+       - Computes temporal difference errors (deltas)
+       - Recursively accumulates corrected returns
+       - Adds baseline value estimates
+
+    3. Advantage Estimation:
+       - Uses clipped importance weights
+       - Computes advantages for policy gradient
+       - Ensures no gradient propagation through targets
+
+    Note:
+        Uses @torch.no_grad() for efficiency since targets
+        should not require gradients for optimization.
+    """
     with torch.no_grad():
         rhos = torch.exp(log_rhos)
         if clip_rho_threshold is not None:

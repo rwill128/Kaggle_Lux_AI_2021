@@ -1,5 +1,20 @@
 """
-Taken from timm: https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/layers/weight_init.py
+Weight initialization utilities adapted from timm library.
+Original source: https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/layers/weight_init.py
+
+In the context of reinforcement learning for Lux AI:
+1. Proper weight initialization is crucial for stable training and faster convergence
+2. Truncated normal distribution prevents extreme weight values that could cause:
+   - Vanishing gradients (weights too small)
+   - Exploding gradients (weights too large)
+3. Bounded initialization helps maintain stable value estimates and policy outputs
+4. Controlled variance in initial weights supports better exploration in early training
+
+These initialization methods are particularly important for:
+- Policy network outputs (avoiding extreme action probabilities)
+- Value network outputs (maintaining reasonable value estimates)
+- Deep network architectures (supporting gradient flow)
+- Multi-head attention weights (preventing attention saturation)
 """
 
 import math
@@ -14,6 +29,32 @@ def _no_grad_trunc_normal_(
         a: float,
         b: float
 ) -> torch.Tensor:
+    """
+    Internal implementation of truncated normal initialization.
+    This function ensures weights are initialized within specific bounds,
+    which is crucial for RL training stability.
+
+    Args:
+        tensor: Target tensor to initialize
+        mean: Center of the distribution
+        std: Standard deviation of the distribution
+        a: Lower bound for truncation
+        b: Upper bound for truncation
+
+    Returns:
+        torch.Tensor: Initialized tensor with values from truncated normal distribution
+
+    Implementation details:
+    1. Uses inverse CDF sampling for efficient truncated normal generation
+    2. Ensures all values fall within [a, b] bounds
+    3. Maintains the specified mean and standard deviation
+    4. Operates without gradient computation for efficiency
+
+    RL considerations:
+    - Bounded initialization prevents extreme initial behaviors
+    - Controlled variance helps with initial exploration
+    - No-gradient operation keeps initialization efficient
+    """
     # Cut & paste from PyTorch official master until it's in a few official releases - RW
     # Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
     def norm_cdf(x):
@@ -57,17 +98,36 @@ def trunc_normal_(
         a: float = -2.,
         b: float = 2.
 ) -> torch.Tensor:
-    r"""Fills the input Tensor with values drawn from a truncated
-    normal distribution. The values are effectively drawn from the
-    normal distribution :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
-    with values outside :math:`[a, b]` redrawn until they are within
-    the bounds. The method used for generating the random values works
-    best when :math:`a \leq \text{mean} \leq b`.
+    r"""Initializes weights using a truncated normal distribution.
+    
+    This initialization is particularly important for RL models as it:
+    1. Prevents extreme initial policy decisions
+    2. Maintains reasonable value estimates
+    3. Supports stable gradient flow in deep networks
+    4. Helps control initial exploration behavior
+
+    The values are drawn from :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
+    and redrawn if outside :math:`[a, b]`. This bounded initialization is
+    crucial for RL training stability.
+
     Args:
-        tensor: an n-dimensional `torch.Tensor`
-        mean: the mean of the normal distribution
-        std: the standard deviation of the normal distribution
-        a: the minimum cutoff value
-        b: the maximum cutoff value
+        tensor: Target tensor to initialize, typically network weights
+        mean: Distribution center, usually 0 for neural networks
+        std: Controls weight variance, affects initial exploration
+        a: Lower bound, prevents too negative weights
+        b: Upper bound, prevents too positive weights
+
+    Returns:
+        torch.Tensor: Initialized tensor with controlled value range
+
+    Usage in RL:
+    - Policy network layers: Use small std (0.01-0.1) for stable initial actions
+    - Value network layers: Use moderate std (0.1-1.0) for reasonable estimates
+    - Attention weights: Use std around 1/sqrt(head_dim) for proper scaling
+    - Deep networks: Adjust bounds based on network depth
+
+    Note:
+        Works best when :math:`a \leq \text{mean} \leq b` to maintain
+        distribution shape while ensuring bounded initialization.
     """
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)

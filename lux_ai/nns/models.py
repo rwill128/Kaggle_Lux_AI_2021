@@ -1,3 +1,20 @@
+"""
+Neural network architecture for the Lux AI agent implementing an actor-critic model.
+
+This module defines the core neural network components used in the RL agent:
+1. DictActor: Handles multi-unit action selection with action masking
+2. MultiLinear: Implements multi-headed linear layers for value estimation
+3. BaselineLayer: Value function approximation with reward scaling
+4. BasicActorCriticNetwork: Main model combining all components
+
+Key Features:
+- Supports multiple overlapping actions per unit/position
+- Uses spectral normalization for stable training
+- Handles both zero-sum and non-zero-sum reward spaces
+- Implements efficient action masking for valid moves
+- Supports multi-headed value estimation for subtask learning
+"""
+
 import gym
 import numpy as np
 import math
@@ -13,6 +30,18 @@ from ..lux_gym.reward_spaces import RewardSpec
 
 
 class DictActor(nn.Module):
+    """
+    Actor network that handles multi-unit action selection.
+    
+    This module processes feature maps to produce action probabilities for multiple
+    units that may occupy the same position. It handles:
+    - Action masking for valid moves
+    - Multiple action types (move, transfer, build, etc.)
+    - Overlapping actions from stacked units
+    
+    The network uses 1x1 convolutions to process each position independently,
+    maintaining spatial structure while producing action logits.
+    """
     def __init__(
             self,
             in_channels: int,
@@ -54,6 +83,25 @@ class DictActor(nn.Module):
             actions_per_square: Optional[int] = MAX_OVERLAPPING_ACTIONS
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
         """
+        Process feature maps to produce action probabilities and selected actions.
+        
+        Args:
+            x: Input feature tensor of shape (batch_size * 2, channels, height, width)
+            available_actions_mask: Dictionary mapping action types to boolean masks
+                                  indicating which actions are valid at each position
+            sample: Whether to sample actions from the policy or take the best action
+            actions_per_square: Maximum number of actions to select per position
+                              (for handling multiple stacked units)
+            
+        Returns:
+            Tuple containing:
+            - Dictionary mapping action types to policy logits
+            - Dictionary mapping action types to selected action indices
+            
+        The method handles both training (sample=True) and inference (sample=False)
+        modes, applying action masking to ensure only valid actions are selected.
+        """
+        """
         Expects an input of shape batch_size * 2, n_channels, h, w
         This input will be projected by the actors, and then converted to shape batch_size, n_channels, 2, h, w
         """
@@ -90,6 +138,24 @@ class DictActor(nn.Module):
     @staticmethod
     @torch.no_grad()
     def logits_to_actions(logits: torch.Tensor, sample: bool, actions_per_square: Optional[int]) -> torch.Tensor:
+        """
+        Convert policy logits to action indices.
+        
+        This method handles the conversion of raw network outputs to actual actions,
+        supporting both sampling (for exploration) and best-action selection (for
+        exploitation).
+        
+        Args:
+            logits: Raw policy network outputs
+            sample: Whether to sample actions or take the best action
+            actions_per_square: Maximum number of actions to select per position
+            
+        Returns:
+            Tensor of selected action indices
+            
+        The method ensures at least actions_per_square actions are available by
+        adding a small epsilon to probabilities when necessary.
+        """
         if actions_per_square is None:
             actions_per_square = logits.shape[-1]
         if sample:
@@ -110,7 +176,15 @@ class DictActor(nn.Module):
 
 
 class MultiLinear(nn.Module):
-    # TODO: Add support for subtask float weightings instead of integer indices
+    """
+    Multi-headed linear layer for value estimation.
+    
+    This module implements multiple parallel linear transformations, useful for
+    handling different subtasks or value estimation heads. Each head can learn
+    different feature weightings while sharing the same input space.
+    
+    TODO: Add support for subtask float weightings instead of integer indices
+    """
     def __init__(self, num_layers: int, in_features: int, out_features: int, bias: bool = True):
         super(MultiLinear, self).__init__()
         self.weights = nn.Parameter(torch.empty((num_layers, in_features, out_features)))
@@ -121,6 +195,13 @@ class MultiLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> NoReturn:
+        """
+        Initialize the multi-headed linear layer parameters.
+        
+        Uses Kaiming initialization for weights and uniform initialization for
+        biases, following PyTorch's default initialization scheme for linear
+        layers but adapted for multiple parallel layers.
+        """
         nn.init.kaiming_uniform_(self.weights, a=math.sqrt(5))
         if self.biases is not None:
             # noinspection PyProtectedMember
@@ -129,6 +210,21 @@ class MultiLinear(nn.Module):
             nn.init.uniform_(self.biases, -bound, bound)
 
     def forward(self, x: torch.Tensor, embedding_idxs: torch.Tensor) -> torch.Tensor:
+        """
+        Apply multiple parallel linear transformations.
+        
+        Args:
+            x: Input tensor
+            embedding_idxs: Indices selecting which linear transformation to use
+                          for each input
+            
+        Returns:
+            Transformed tensor using the selected linear layers
+            
+        Each input sample is processed by its corresponding linear layer as
+        specified by embedding_idxs, enabling different transformations for
+        different subtasks.
+        """
         weights = self.weights[embedding_idxs]
         if self.biases is None:
             biases = 0.
@@ -138,6 +234,16 @@ class MultiLinear(nn.Module):
 
 
 class BaselineLayer(nn.Module):
+    """
+    Value function approximation layer.
+    
+    This layer estimates the value (expected future reward) of the current state.
+    It handles:
+    - Multiple value heads for different subtasks
+    - Zero-sum and non-zero-sum reward spaces
+    - Reward scaling and normalization
+    - Optional input rescaling for better numerical stability
+    """
     def __init__(self, in_channels: int, reward_space: RewardSpec, n_value_heads: int, rescale_input: bool):
         super(BaselineLayer, self).__init__()
         assert n_value_heads >= 1
@@ -161,6 +267,23 @@ class BaselineLayer(nn.Module):
 
     def forward(self, x: torch.Tensor, input_mask: torch.Tensor, value_head_idxs: Optional[torch.Tensor]):
         """
+        Compute state values from feature maps.
+        
+        Args:
+            x: Input feature tensor of shape (batch_size * 2, channels, height, width)
+            input_mask: Boolean mask indicating valid input positions
+            value_head_idxs: Optional indices for selecting value heads for
+                            different subtasks
+            
+        Returns:
+            Tensor of estimated state values, scaled to the appropriate reward range
+            
+        The method:
+        1. Averages feature planes (with optional rescaling)
+        2. Projects to value estimates using single or multi-headed linear layers
+        3. Rescales outputs to the configured reward range
+        """
+        """
         Expects an input of shape b * 2, n_channels, x, y
         Returns an output of shape b, 2
         """
@@ -181,6 +304,21 @@ class BaselineLayer(nn.Module):
 
 
 class BasicActorCriticNetwork(nn.Module):
+    """
+    Main actor-critic network architecture.
+    
+    This network combines several components for deep reinforcement learning:
+    1. Base Model: Processes raw input into feature maps
+    2. Actor Head: Selects actions for multiple units
+    3. Critic Head: Estimates state values
+    
+    Key Features:
+    - Uses spectral normalization for stable training
+    - Supports multi-headed value estimation
+    - Handles dictionary-based observations and actions
+    - Implements action masking for valid moves
+    - Optional value input rescaling
+    """
     def __init__(
             self,
             base_model: nn.Module,
@@ -243,6 +381,26 @@ class BasicActorCriticNetwork(nn.Module):
             sample: bool = True,
             **actor_kwargs
     ) -> Dict[str, Any]:
+        """
+        Process observations through the full actor-critic network.
+        
+        This method implements the full forward pass through the network:
+        1. Process dictionary inputs into feature tensors
+        2. Run base model to extract features
+        3. Generate action probabilities through actor head
+        4. Estimate state values through critic head
+        
+        Args:
+            x: Dictionary of observations
+            sample: Whether to sample actions or take best actions
+            **actor_kwargs: Additional arguments passed to actor forward()
+            
+        Returns:
+            Dictionary containing:
+            - actions: Selected action indices
+            - policy_logits: Raw policy network outputs
+            - baseline: Estimated state values
+        """
         x, input_mask, available_actions_mask, subtask_embeddings = self.dict_input_layer(x)
         base_out, input_mask = self.base_model((x, input_mask))
         if subtask_embeddings is not None:
@@ -261,13 +419,44 @@ class BasicActorCriticNetwork(nn.Module):
         )
 
     def sample_actions(self, *args, **kwargs):
+        """
+        Convenience method for running forward pass in sampling mode.
+        
+        This mode is used during training to enable exploration through
+        stochastic action selection.
+        """
         return self.forward(*args, sample=True, **kwargs)
 
     def select_best_actions(self, *args, **kwargs):
+        """
+        Convenience method for running forward pass in exploitation mode.
+        
+        This mode is used during evaluation/inference to select the actions
+        with highest probability according to the current policy.
+        """
         return self.forward(*args, sample=False, **kwargs)
 
     @staticmethod
     def make_spectral_norm_head_base(n_layers: int, n_channels: int, activation: Callable) -> nn.Module:
+        """
+        Create a network head with spectral normalization for stability.
+        
+        This method constructs a sequence of convolutional layers with spectral
+        normalization applied to the semifinal layer. This architecture choice
+        helps stabilize training by constraining the Lipschitz constant of the
+        network.
+        
+        Args:
+            n_layers: Number of layers in the head (must be >= 2)
+            n_channels: Number of channels in each layer
+            activation: Activation function to use between layers
+            
+        Returns:
+            Sequential module containing the constructed head layers
+            
+        Note: The method actually returns n_layers-1 layers, leaving the final
+        layer to be filled in with the proper action or value output layer.
+        """
         """
         Returns the base of an action or value head, with the final layer of the base/the semifinal layer of the
         head spectral normalized.

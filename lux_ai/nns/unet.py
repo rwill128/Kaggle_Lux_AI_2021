@@ -6,6 +6,38 @@ from .conv_blocks import ResidualBlock
 
 
 class UNET(nn.Module):
+    """
+    U-Net architecture for multi-scale game state processing in the RL agent.
+    This network enables both local tactical and global strategic decision-making
+    through its hierarchical feature processing structure.
+
+    Architecture Overview:
+    1. Downsampling path (encoder):
+       - Progressively reduces spatial dimensions
+       - Increases channel depth for abstract features
+       - Uses residual blocks for stable training
+    
+    2. Upsampling path (decoder):
+       - Gradually restores spatial resolution
+       - Combines fine and coarse features via skip connections
+       - Maintains context while recovering details
+
+    Strategic Benefits for RL:
+    - Local Features (high resolution):
+        * Unit-to-unit interactions
+        * Resource gathering tactics
+        * Combat positioning
+    
+    - Global Features (low resolution):
+        * Territory control assessment
+        * Resource distribution patterns
+        * Strategic unit deployment
+    
+    - Multi-scale Integration:
+        * Coordinated unit movements
+        * Resource allocation strategies
+        * Balanced local-global decision making
+    """
     def __init__(
             self,
             n_blocks_per_reduction: int,
@@ -14,6 +46,22 @@ class UNET(nn.Module):
             width: int,
             **residual_block_kwargs
     ):
+        """
+        Initialize the U-Net architecture.
+
+        Args:
+            n_blocks_per_reduction: Number of residual blocks at each resolution
+            in_out_channels: Number of input/output channels
+            height: Height of input game state
+            width: Width of input game state
+            **residual_block_kwargs: Additional arguments for residual blocks
+
+        Architecture Details:
+        - 3 resolution levels (original, /2, /4)
+        - Channel expansion at each reduction (1x, 2x, 4x)
+        - Skip connections between corresponding levels
+        - Residual blocks for feature processing
+        """
         super(UNET, self).__init__()
 
         block1_channels = in_out_channels
@@ -109,6 +157,35 @@ class UNET(nn.Module):
         )
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process game state through multi-scale feature extraction.
+
+        Args:
+            x: Tuple of (features, mask) where:
+               - features: Game state tensor (batch_size, channels, height, width)
+               - mask: Valid position mask (batch_size, 1, height, width)
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Processed (features, mask) where:
+            - features: Multi-scale processed state representation
+            - mask: Original input mask
+
+        Processing Flow:
+        1. Downsampling path:
+           - Level 1: Original resolution features
+           - Level 2: 1/2 resolution, broader context
+           - Level 3: 1/4 resolution, global patterns
+
+        2. Upsampling path:
+           - Combines Level 3 features with Level 2
+           - Combines enhanced Level 2 with Level 1
+           - Produces final multi-scale representation
+
+        The multi-scale processing enables:
+        - Tactical decisions from fine details
+        - Strategic planning from broader context
+        - Integrated local-global reasoning
+        """
         x_orig, input_mask_orig = x
 
         x1, input_mask1 = self.block1_down((x_orig, input_mask_orig.float()))

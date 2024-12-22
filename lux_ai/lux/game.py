@@ -8,9 +8,43 @@ DN_CYCLE_LEN = GAME_CONSTANTS["PARAMETERS"]["DAY_LENGTH"] + GAME_CONSTANTS["PARA
 
 
 class Game:
+    """Core game state manager for the Lux AI environment.
+
+    This class maintains and updates the complete game state, including:
+    - Map state (resources, roads, etc.)
+    - Player states (units, cities, research)
+    - Turn information and day/night cycle
+
+    The Game class serves as the primary interface between the competition
+    engine and the RL environment. It:
+    1. Parses game state updates from the engine
+    2. Maintains a consistent world state
+    3. Provides access to game state components
+    4. Tracks game progression (turns, day/night)
+
+    Implementation Details:
+    - Uses GameMap for spatial information
+    - Manages Player objects for team states
+    - Handles resource updates and city management
+    - Processes unit actions and movements
+    - Tracks research progress and city fuel
+
+    Note:
+        This implementation focuses on efficient state updates and
+        clean interfaces for the RL environment to observe the
+        game state.
+    """
+
     def _initialize(self, messages):
-        """
-        initialize state
+        """Initializes the game state from initial messages.
+
+        Sets up the game map, players, and initial state variables
+        based on the first messages received from the game engine.
+
+        Args:
+            messages (list): Initial messages from game engine containing:
+                - Player ID (int)
+                - Map dimensions (str: "width height")
         """
         self.id = int(messages[0])
         self.turn = -1
@@ -23,9 +57,29 @@ class Game:
 
     @staticmethod
     def _end_turn():
+        """Signals the end of turn to the game engine.
+
+        Outputs the "D_FINISH" command to indicate that all
+        actions for the current turn have been submitted.
+
+        Note:
+            This is a critical synchronization point between
+            the agent and the game engine.
+        """
         print("D_FINISH")
 
     def _reset_player_states(self):
+        """Resets all player-specific state variables.
+
+        Clears unit lists, city dictionaries, and city tile counts for both players.
+        Called at the start of each turn to prepare for state updates.
+
+        Implementation:
+        - Resets unit lists to empty
+        - Clears city dictionaries
+        - Zeros city tile counts
+        - Maintains player IDs and research points
+        """
         self.players[0].units = []
         self.players[0].cities = {}
         self.players[0].city_tile_count = 0
@@ -35,8 +89,38 @@ class Game:
 
     # noinspection PyProtectedMember
     def _update(self, messages):
-        """
-        update state
+        """Updates game state based on messages from the engine.
+
+        Processes a series of state update messages to refresh the game state
+        for the current turn. Handles updates for:
+        - Research points
+        - Resources on map
+        - Unit positions and resources
+        - City states and fuel
+        - City tile positions and cooldowns
+        - Road levels
+
+        Args:
+            messages (list): List of space-separated update strings, each containing:
+                - Update type identifier
+                - Type-specific data (positions, amounts, IDs, etc.)
+
+        Implementation Details:
+        1. Resets map and player states
+        2. Processes updates in order:
+           - Research points (team progress)
+           - Resources (wood, coal, uranium)
+           - Units (workers, carts)
+           - Cities (fuel, upkeep)
+           - City tiles (position, cooldown)
+           - Roads (position, level)
+        3. Maintains game turn counter
+        4. Handles optional position skipping
+
+        Note:
+            The skip attribute allows certain positions to be ignored,
+            which is useful for the RL environment to test hypothetical
+            states.
         """
         self.map = GameMap(self.map_width, self.map_height)
         self.turn += 1
@@ -97,4 +181,19 @@ class Game:
 
     @property
     def is_night(self) -> bool:
+        """Determines if the current turn is during night time.
+
+        Uses the day/night cycle length and current turn to calculate
+        whether it's currently night. This affects:
+        - City fuel consumption
+        - Unit cooldowns
+        - Resource collection rates
+
+        Returns:
+            bool: True if it's night time, False if day time
+
+        Note:
+            The day/night cycle is a key strategic element as it affects
+            resource gathering efficiency and city survival.
+        """
         return self.turn % DN_CYCLE_LEN >= GAME_CONSTANTS["PARAMETERS"]["DAY_LENGTH"]

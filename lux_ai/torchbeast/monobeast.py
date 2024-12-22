@@ -11,6 +11,46 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+"""IMPALA (Importance Weighted Actor-Learner Architecture) Implementation.
+
+This module implements the IMPALA distributed training architecture with several
+key enhancements for the Lux AI competition:
+
+1. Distributed Architecture:
+   - Multiple actor processes collect experience in parallel
+   - Central learner performs optimization using collected experience
+   - Efficient experience replay using queue-based communication
+   - Mixed precision training support for better GPU utilization
+
+2. Policy Optimization:
+   - V-trace for off-policy correction
+   - TD(λ) returns for value function training
+   - UPGO (Upgoing Policy Gradient) for improved credit assignment
+   - Optional teacher model for knowledge distillation
+
+3. Training Features:
+   - Automatic checkpointing and model saving
+   - Wandb integration for experiment tracking
+   - Learning rate scheduling with warmup
+   - Gradient clipping for stability
+   - Multi-threaded batch processing
+
+Key Components:
+- Actor processes: Collect experience using current policy
+- Learner threads: Update policy using collected experience
+- Experience replay: Queue-based buffer management
+- Policy heads: Multiple action spaces for different unit types
+- Value function: Baseline estimation for advantage computation
+
+The implementation is based on the IMPALA paper:
+"IMPALA: Scalable Distributed Deep-RL with Importance Weighted Actor-Learner Architectures"
+but includes several modifications for the Lux AI domain:
+1. Multiple action spaces for different unit types
+2. Teacher-student learning capability
+3. Enhanced credit assignment using UPGO
+4. Mixed precision training support
+"""
 import logging
 import math
 from omegaconf import OmegaConf
@@ -55,11 +95,37 @@ def combine_policy_logits_to_log_probs(
         actions: torch.Tensor,
         actions_taken_mask: torch.Tensor
 ) -> torch.Tensor:
-    """
-    Combines all policy_logits at a given step to get a single action_log_probs value for that step
+    """Computes log probabilities for taken actions with proper masking and normalization.
 
-    Initial shape: time, batch, 1, players, x, y, n_actions
-    Returned shape: time, batch, players
+    This function handles the complex case of multiple action spaces in the Lux AI domain,
+    where different unit types can take different actions. It properly accounts for the
+    sequential nature of action selection (sampling without replacement) and masks invalid
+    actions.
+
+    Args:
+        behavior_policy_logits: Raw policy network outputs
+            Shape: [time, batch, 1, players, x, y, n_actions]
+        actions: Indices of actions that were actually taken
+            Shape: [time, batch, 1, players, x, y, 1]
+        actions_taken_mask: Binary mask indicating valid action positions
+            Shape: [time, batch, 1, players, x, y, n_actions]
+
+    Returns:
+        Combined log probabilities for each timestep and player
+        Shape: [time, batch, players]
+
+    Implementation Details:
+    1. Converts logits to probabilities using softmax
+    2. Applies mask to zero out invalid actions
+    3. Gathers probabilities of taken actions
+    4. Converts to conditional probabilities (sampling without replacement)
+    5. Handles numerical stability (avoids log(0))
+    6. Combines log probs across spatial and action dimensions
+
+    Note:
+        The conversion to conditional probabilities is necessary because
+        we sample actions without replacement (e.g., a unit can't move
+        to multiple locations in one turn).
     """
     # Get the action probabilities
     probs = F.softmax(behavior_policy_logits, dim=-1)
@@ -99,13 +165,33 @@ def combine_policy_entropy(
         policy_logits: torch.Tensor,
         actions_taken_mask: torch.Tensor
 ) -> torch.Tensor:
-    """
-    Computes and combines policy entropy for a given step.
-    NB: We are just computing the sum of individual entropies, not the joint entropy, because I don't think there is
-    an efficient way to compute the joint entropy?
+    """Computes policy entropy for exploration regularization.
 
-    Initial shape: time, batch, action_planes, players, x, y, n_actions
-    Returned shape: time, batch, players
+    Calculates the entropy of the policy distribution at each action location
+    and combines them. This encourages exploration by penalizing overly
+    deterministic policies.
+
+    Note:
+        Computes the sum of individual entropies rather than joint entropy
+        across all actions, as computing the full joint entropy would be
+        computationally intractable given the large action space.
+
+    Args:
+        policy_logits: Raw policy network outputs
+            Shape: [time, batch, action_planes, players, x, y, n_actions]
+        actions_taken_mask: Binary mask indicating valid action positions
+            Shape: [time, batch, action_planes, players, x, y]
+
+    Returns:
+        Combined entropy values for each timestep and player
+        Shape: [time, batch, players]
+
+    Implementation Details:
+    1. Converts logits to probabilities using softmax
+    2. Computes entropy using standard formula: -sum(p * log(p))
+    3. Handles numerical stability for log(0) cases
+    4. Applies mask to only consider valid action positions
+    5. Combines entropies across spatial and action dimensions
     """
     policy = F.softmax(policy_logits, dim=-1)
     log_policy = F.log_softmax(policy_logits, dim=-1)
@@ -126,6 +212,37 @@ def compute_teacher_kl_loss(
         teacher_policy_logits: torch.Tensor,
         actions_taken_mask: torch.Tensor
 ) -> torch.Tensor:
+    """Computes KL divergence loss for teacher-student learning.
+
+    This implements knowledge distillation by encouraging the learner's policy
+    to match a pre-trained teacher's policy distribution. The KL divergence
+    measures how much the learner's policy differs from the teacher's.
+
+    Args:
+        learner_policy_logits: Raw policy outputs from student model
+            Shape: [time, batch, action_planes, players, x, y, n_actions]
+        teacher_policy_logits: Raw policy outputs from teacher model
+            Shape: [time, batch, action_planes, players, x, y, n_actions]
+        actions_taken_mask: Binary mask indicating valid action positions
+            Shape: [time, batch, action_planes, players, x, y]
+
+    Returns:
+        KL divergence loss for each timestep and player
+        Shape: [time, batch, players]
+
+    Implementation Details:
+    1. Converts both policies to proper distributions:
+       - Learner logits -> log probabilities
+       - Teacher logits -> probabilities
+    2. Computes KL divergence using torch.nn.functional.kl_div
+    3. Detaches teacher probabilities to prevent gradient flow
+    4. Applies mask to only consider valid action positions
+    5. Combines KL divergences across spatial and action dimensions
+
+    Note:
+        The teacher's policy is treated as a fixed target (detached)
+        to ensure we only update the learner's parameters.
+    """
     learner_policy_log_probs = F.log_softmax(learner_policy_logits, dim=-1)
     teacher_policy = F.softmax(teacher_policy_logits, dim=-1)
     kl_div = F.kl_div(
@@ -141,6 +258,21 @@ def compute_teacher_kl_loss(
 
 
 def reduce(losses: torch.Tensor, reduction: str) -> torch.Tensor:
+    """Reduces a tensor of losses to a single value.
+
+    Utility function that provides consistent reduction behavior
+    across different loss components (policy, value, entropy, etc.).
+
+    Args:
+        losses: Tensor of individual loss terms
+        reduction: Reduction method, either "mean" or "sum"
+
+    Returns:
+        Reduced loss value (scalar)
+
+    Raises:
+        ValueError: If reduction is not "mean" or "sum"
+    """
     if reduction == "mean":
         return losses.mean()
     elif reduction == "sum":
@@ -150,6 +282,24 @@ def reduce(losses: torch.Tensor, reduction: str) -> torch.Tensor:
 
 
 def compute_baseline_loss(values: torch.Tensor, value_targets: torch.Tensor, reduction: str) -> torch.Tensor:
+    """Computes value function (baseline) loss using Huber loss.
+
+    Uses smooth L1 loss (Huber loss) which is less sensitive to outliers
+    compared to MSE loss, making it more suitable for value estimation
+    in environments with potentially high variance returns.
+
+    Args:
+        values: Predicted state values from model
+        value_targets: Target values (e.g., TD(λ) returns)
+        reduction: Reduction method for combining losses
+
+    Returns:
+        Reduced loss value (scalar)
+
+    Note:
+        Target values are detached to prevent gradient flow through
+        the target computation graph (e.g., TD(λ) computation).
+    """
     baseline_loss = F.smooth_l1_loss(values, value_targets.detach(), reduction="none")
     return reduce(baseline_loss, reduction=reduction)
 
@@ -159,6 +309,31 @@ def compute_policy_gradient_loss(
         advantages: torch.Tensor,
         reduction: str
 ) -> torch.Tensor:
+    """Computes policy gradient loss using advantage estimation.
+
+    Implements the policy gradient theorem using advantage estimates
+    to reduce variance. The advantage function helps determine whether
+    actions were better or worse than expected.
+
+    Args:
+        action_log_probs: Log probabilities of taken actions
+        advantages: Advantage estimates (e.g., from V-trace or UPGO)
+        reduction: Reduction method for combining losses
+
+    Returns:
+        Reduced policy gradient loss (scalar)
+
+    Implementation Details:
+    1. Uses negative log probability as the base loss
+    2. Scales loss by advantage estimates
+    3. Detaches advantages to only update policy network
+    4. Applies specified reduction method
+
+    Note:
+        This implements the core policy gradient update:
+        L = -log(π(a|s)) * A(s,a)
+        where A(s,a) is the advantage estimate.
+    """
     cross_entropy = -action_log_probs.view_as(advantages)
     return reduce(cross_entropy * advantages.detach(), reduction)
 
@@ -173,6 +348,48 @@ def act(
         actor_model: torch.nn.Module,
         buffers: Buffers,
 ):
+    """Actor process that collects experience using current policy.
+
+    This function runs in a separate process and continuously:
+    1. Gets environment observations
+    2. Runs policy inference
+    3. Takes actions and collects rewards
+    4. Stores experience in shared buffers
+
+    Args:
+        flags: Configuration namespace
+        teacher_flags: Optional teacher model config
+        actor_index: Unique ID for this actor
+        free_queue: Queue of available buffer indices
+        full_queue: Queue of filled buffer indices
+        actor_model: Shared policy network
+        buffers: Shared experience buffers
+
+    Implementation Details:
+    1. Environment Interaction:
+       - Maintains environment instance
+       - Handles episode termination
+       - Processes observations and rewards
+
+    2. Experience Collection:
+       - Uses current policy to select actions
+       - Stores transitions in buffers
+       - Manages buffer indexing via queues
+
+    3. Synchronization:
+       - Gets latest policy from shared model
+       - Coordinates buffer access with learner
+       - Handles process termination
+
+    4. Error Handling:
+       - Catches and reports exceptions
+       - Ensures clean process shutdown
+       - Maintains actor-learner communication
+
+    Note:
+        Runs with torch.no_grad() for efficiency since
+        no gradients are needed for acting.
+    """
     if flags.debug:
         catch_me = AssertionError
     else:
@@ -271,7 +488,62 @@ def learn(
         baseline_only: bool = False,
         lock=threading.Lock(),
 ) -> Tuple[Dict, int]:
-    """Performs a learning (optimization) step."""
+    """Performs a learning step using multiple policy optimization techniques.
+
+    This function implements the core learning algorithm combining several
+    techniques for stable and efficient policy optimization:
+
+    1. Return Estimation:
+       - V-trace for off-policy correction
+       - TD(λ) returns for value function training
+       - UPGO returns for improved credit assignment
+
+    2. Loss Components:
+       - Policy gradient loss using advantages
+       - Value function loss using TD(λ) targets
+       - Entropy regularization for exploration
+       - Optional teacher KL and baseline losses
+
+    Args:
+        flags: Configuration namespace
+        actor_model: Model used by actors for rollouts
+        learner_model: Model being optimized
+        teacher_model: Optional pre-trained model for distillation
+        batch: Dictionary of experience data
+        optimizer: Optimization algorithm
+        grad_scaler: Gradient scaler for mixed precision
+        lr_scheduler: Learning rate scheduler
+        total_games_played: Counter for completed games
+        baseline_only: Whether to only train value function
+        lock: Thread lock for synchronization
+
+    Returns:
+        Tuple containing:
+        - Dictionary of training statistics
+        - Updated total_games_played counter
+
+    Implementation Details:
+    1. Forward Pass:
+       - Processes batch through learner model
+       - Optionally gets teacher predictions
+       - Computes various return estimates
+
+    2. Loss Computation:
+       - Combines multiple loss components
+       - Handles multi-headed policy outputs
+       - Applies proper masking for valid actions
+
+    3. Optimization:
+       - Uses mixed precision when enabled
+       - Applies gradient clipping
+       - Updates learning rate
+       - Syncs actor model with learner
+
+    4. Monitoring:
+       - Tracks detailed loss components
+       - Monitors action distributions
+       - Records various training metrics
+    """
     with lock:
         with amp.autocast(enabled=flags.use_mixed_precision):
             flattened_batch = buffers_apply(batch, lambda x: torch.flatten(x, start_dim=0, end_dim=1))
@@ -514,6 +786,46 @@ def learn(
 
 
 def train(flags):
+    """Main training loop implementing the IMPALA distributed architecture.
+
+    This function sets up and coordinates the distributed training system:
+    1. Creates actor processes for parallel experience collection
+    2. Initializes learner threads for policy optimization
+    3. Manages experience replay through queues
+    4. Handles checkpointing and logging
+
+    Args:
+        flags: Configuration namespace containing:
+            - num_actors: Number of parallel actors
+            - num_buffers: Size of experience replay
+            - batch_size: Number of sequences per optimization step
+            - unroll_length: Length of training sequences
+            - total_steps: Total environment steps to train for
+            - checkpoint_freq: How often to save checkpoints (minutes)
+            - use_teacher: Whether to use teacher-student learning
+            - Various hyperparameters for optimization
+
+    Implementation Details:
+    1. Actor Management:
+       - Creates multiple actor processes
+       - Each actor runs environment steps using current policy
+       - Experience is stored in shared buffers
+
+    2. Learner Coordination:
+       - Multiple learner threads process batches
+       - Uses queue system for buffer management
+       - Applies various policy optimization techniques
+
+    3. Resource Management:
+       - Efficient GPU memory usage with mixed precision
+       - Proper cleanup of processes and threads
+       - Handles termination signals gracefully
+
+    4. Monitoring:
+       - Tracks training progress and metrics
+       - Integrates with wandb for visualization
+       - Saves periodic checkpoints for recovery
+    """
     # Necessary for multithreading and multiprocessing
     os.environ["OMP_NUM_THREADS"] = "1"
 

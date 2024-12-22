@@ -85,6 +85,26 @@ class ResidualBlock(nn.Module):
             self.squeeze_excitation = nn.Identity()
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process game state through the residual block.
+
+        Args:
+            x: Tuple of (features, mask) where:
+               - features: Game state tensor (batch_size, channels, height, width)
+               - mask: Valid position mask (batch_size, 1, height, width)
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Processed (features, mask) where:
+            - features: Updated representation incorporating residual connection
+            - mask: Unchanged input mask
+
+        Processing steps:
+        1. First convolution and normalization
+        2. Non-linear activation
+        3. Second convolution and normalization
+        4. Optional squeeze-excitation
+        5. Skip connection and final activation
+        """
         x, input_mask = x
         identity = x
         x = self.conv1(x) * input_mask
@@ -189,6 +209,26 @@ class ParallelDilationResidualBlock(nn.Module):
             self.change_n_channels = nn.Identity()
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process game state through parallel standard and dilated convolutions.
+
+        Args:
+            x: Tuple of (features, mask) where:
+               - features: Game state tensor (batch_size, channels, height, width)
+               - mask: Valid position mask (batch_size, 1, height, width)
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Processed (features, mask) where:
+            - features: Combined multi-scale features from both branches
+            - mask: Unchanged input mask
+
+        Processing flow:
+        1. Main branch: Standard convolutions for local patterns
+        2. Dilated branch: Expanded convolutions for broader context
+        3. Independent normalization and SE for each branch
+        4. Feature fusion through addition
+        5. Final activation and masking
+        """
         x_orig, input_mask = x
 
         # Main branch

@@ -8,8 +8,23 @@ from .weight_init import trunc_normal_
 
 class RelPosSelfAttention(nn.Module):
     """
-    Relative Position Self Attention
-    From: https://gist.github.com/ShoufaChen/ec7b70038a6fdb488da4b34355380569
+    Relative Position Self Attention module for processing spatial game state information.
+    This attention mechanism is crucial for the RL agent to understand spatial relationships
+    between game elements like units, resources, and cities on the game map.
+    
+    The relative positional encoding allows the model to better understand:
+    1. Unit positioning and movement possibilities
+    2. Resource proximity and accessibility
+    3. City tile connections and expansion opportunities
+    4. Enemy unit threat ranges and strategic positions
+    
+    Original implementation from: https://gist.github.com/ShoufaChen/ec7b70038a6fdb488da4b34355380569
+    
+    Key RL applications:
+    - Enables the agent to learn spatial patterns in the game state
+    - Helps in planning unit movements considering relative positions
+    - Assists in resource gathering by understanding proximity relationships
+    - Supports strategic city placement through spatial understanding
     """
 
     def __init__(self, h: int, w: int, dim: int, relative=True, fold_heads=False):
@@ -49,6 +64,28 @@ class RelPosSelfAttention(nn.Module):
         return attn_out
 
     def relative_logits(self, q):
+        """
+        Compute relative position logits for both width and height dimensions.
+        This is crucial for the RL agent to understand spatial relationships on the game board.
+
+        Args:
+            q: Query tensor of shape (batch_size, n_heads, height, width, dim)
+               Represents features for attention queries
+
+        Returns:
+            torch.Tensor: Combined relative position logits for both dimensions
+        
+        Process:
+        1. Compute relative logits in width dimension using rel_emb_w
+        2. Compute relative logits in height dimension using rel_emb_h
+        3. Combine both dimensions to capture full 2D spatial relationships
+
+        Strategic importance:
+        - Enables understanding of unit positions relative to resources
+        - Helps in planning city expansions in optimal directions
+        - Supports tactical positioning in combat scenarios
+        - Facilitates efficient resource gathering paths
+        """
         # Relative logits in width dimension.
         rel_logits_w = self.relative_logits_1d(
             q,
@@ -64,6 +101,30 @@ class RelPosSelfAttention(nn.Module):
         return rel_logits_h + rel_logits_w
 
     def relative_logits_1d(self, q, rel_k, transpose_mask):
+        """
+        Compute relative position logits for a single dimension (width or height).
+        This method processes spatial relationships along one axis of the game board.
+
+        Args:
+            q: Query tensor of shape (batch_size, n_heads, h, w, dim)
+            rel_k: Relative position embeddings
+            transpose_mask: List defining the permutation for proper tensor alignment
+
+        Returns:
+            torch.Tensor: Relative position logits for the specified dimension
+
+        Process:
+        1. Compute attention logits between queries and relative position keys
+        2. Reshape for efficient relative-to-absolute conversion
+        3. Convert relative positions to absolute positions
+        4. Reshape and align dimensions for the full attention computation
+
+        Used for:
+        - Processing directional relationships (horizontal/vertical)
+        - Understanding unit movement possibilities
+        - Analyzing resource accessibility
+        - Planning expansion directions
+        """
         bs, heads, h, w, dim = q.shape
         rel_logits = torch.einsum('bhxyd,md->bhxym', q, rel_k)
         rel_logits = torch.reshape(rel_logits, [-1, heads * h, w, 2 * w - 1])
@@ -76,9 +137,28 @@ class RelPosSelfAttention(nn.Module):
 
     def rel_to_abs(self, x):
         """
-        Converts relative indexing to absolute.
-        Input: [bs, heads, length, 2*length - 1]
-        Output: [bs, heads, length, length]
+        Converts relative position indexing to absolute position indexing.
+        This conversion is essential for the RL agent to properly process
+        spatial relationships in the game state.
+
+        Args:
+            x: Tensor with relative indices [bs, heads, length, 2*length - 1]
+               Contains relative position information between game board positions
+
+        Returns:
+            torch.Tensor: Tensor with absolute indices [bs, heads, length, length]
+                         Represents relationships between absolute positions
+
+        Strategic importance:
+        - Enables precise unit positioning calculations
+        - Supports accurate distance-based decision making
+        - Facilitates efficient pathfinding
+        - Helps in analyzing strategic position control
+
+        Implementation note:
+        The conversion process maintains the spatial structure of the game board
+        while transforming relative position information into a format suitable
+        for attention computations.
         """
         bs, heads, length, _ = x.shape
         col_pad = torch.zeros((bs, heads, length, 1), dtype=x.dtype, device=x.device)
@@ -93,7 +173,21 @@ class RelPosSelfAttention(nn.Module):
 
 
 class GroupPointWise(nn.Module):
-    """"""
+    """
+    Group-wise point-wise convolution layer for efficient feature processing in the RL agent.
+    This layer helps in processing multi-head features while maintaining computational efficiency.
+    
+    In the context of Lux AI:
+    - Processes features from different aspects of the game state (units, resources, cities)
+    - Enables parallel processing of different strategic considerations
+    - Helps in combining different types of game information efficiently
+    
+    The grouped processing allows the model to:
+    1. Learn specialized features for different game aspects
+    2. Process multiple strategic considerations in parallel
+    3. Maintain computational efficiency with grouped convolutions
+    4. Scale feature processing based on input complexity
+    """
     def __init__(self, in_channels, heads=4, proj_factor=1, target_dimension=None):
         super(GroupPointWise, self).__init__()
         if target_dimension is not None:
@@ -122,6 +216,26 @@ class GroupPointWise(nn.Module):
 
 class RPSA(nn.Module):
     """
+    Relative Position Self-Attention module specifically designed for the Lux AI agent.
+    This module combines relative positional encoding with self-attention to process
+    the game state while maintaining spatial relationships.
+    
+    Key components for RL:
+    1. Query/Key/Value projections for attention computation
+    2. Relative position encoding for spatial awareness
+    3. Multi-head attention for parallel feature processing
+    
+    Strategic benefits:
+    - Enables long-range dependencies in strategic planning
+    - Maintains spatial relationships for tactical decisions
+    - Processes multiple game aspects simultaneously
+    - Helps in understanding complex board states
+    
+    The module is crucial for:
+    - Unit coordination and movement planning
+    - Resource allocation strategies
+    - City expansion decisions
+    - Enemy threat assessment
     """
     def __init__(self, in_channels, heads, height, width, pos_enc_type='relative'):
         super(RPSA, self).__init__()
@@ -146,8 +260,29 @@ class RPSA(nn.Module):
 
 class GPSA(nn.Module):
     """
-    Gated positional self-attention
-    From: https://github.com/facebookresearch/convit/blob/main/convit.py
+    Gated Positional Self-Attention module adapted for the Lux AI environment.
+    Originally from: https://github.com/facebookresearch/convit/blob/main/convit.py
+    
+    This advanced attention mechanism combines gating with positional awareness,
+    allowing the RL agent to dynamically focus on relevant spatial regions of the game state.
+    
+    Key RL features:
+    1. Gating mechanism to control attention flow
+    2. Learnable positional encoding
+    3. Local-global attention balance
+    4. Multi-head processing for parallel strategy evaluation
+    
+    Strategic applications:
+    - Dynamic focus on critical game areas
+    - Balanced local-global strategic planning
+    - Adaptive attention based on game phase
+    - Efficient processing of complex game states
+    
+    Implementation details:
+    - Uses locality strength to control attention spread
+    - Combines patch-based and position-based attention
+    - Implements efficient relative position computation
+    - Supports masked attention for valid action selection
     """
     def __init__(self, dim, height, width, n_heads=4, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,
                  locality_strength=1., use_local_init=True):
@@ -198,6 +333,26 @@ class GPSA(nn.Module):
         return x
 
     def get_attention(self, x, input_mask):
+        """
+        Compute gated positional attention weights for the game state.
+
+        Args:
+            x: Input tensor of shape (batch_size, n_patches, dim)
+               Flattened game state features
+            input_mask: Mask tensor of shape (batch_size, n_patches)
+                       Indicates valid positions in the game state
+
+        Returns:
+            torch.Tensor: Attention weights combining positional and content-based attention,
+                         shape (batch_size, n_heads, n_patches, n_patches)
+        
+        The attention computation:
+        1. Projects input to queries and keys
+        2. Computes content-based attention (patch_score)
+        3. Computes position-based attention (pos_score)
+        4. Combines both using learnable gating
+        5. Applies masking and normalization
+        """
         B, N, C = x.shape
         qk = self.qk(x).reshape(B, N, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k = qk[0], qk[1]
@@ -240,6 +395,23 @@ class GPSA(nn.Module):
         self.pos_proj.weight.data *= locality_strength
 
     def get_rel_indices(self):
+        """
+        Compute relative position indices for the game board.
+        Creates a tensor encoding relative positions between all pairs of cells.
+
+        Returns:
+            torch.Tensor: Relative position indices of shape (1, n_patches, n_patches, 3)
+                         Each position contains (dx, dy, d^2) where:
+                         - dx: relative x-coordinate difference
+                         - dy: relative y-coordinate difference
+                         - d^2: squared Euclidean distance
+
+        Used for:
+        - Unit movement planning
+        - Resource distance evaluation
+        - City placement strategies
+        - Combat positioning
+        """
         assert self.height == self.width
         img_size = self.height
         num_patches = self.height * self.width
@@ -256,6 +428,29 @@ class GPSA(nn.Module):
 
 
 class ViTBlock(nn.Module):
+    """
+    Vision Transformer Block adapted for the Lux AI reinforcement learning agent.
+    This block combines multi-head self-attention with MLP layers to process
+    spatial game information and extract strategic features.
+    
+    Architecture components:
+    1. Layer normalization for stable training
+    2. Multi-head self-attention for parallel feature processing
+    3. MLP with GELU activation for non-linear transformations
+    4. Residual connections for gradient flow
+    
+    RL-specific features:
+    - Processes game state as a spatial grid
+    - Maintains input masking for valid action selection
+    - Combines local and global game information
+    - Supports stable policy and value prediction
+    
+    The block is crucial for:
+    - Strategic feature extraction
+    - Long-range dependency modeling
+    - Action space understanding
+    - Value function approximation
+    """
     def __init__(
             self,
             in_channels: int,
@@ -287,6 +482,26 @@ class ViTBlock(nn.Module):
         )
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process game state through the Vision Transformer block.
+
+        Args:
+            x: Tuple of (features, mask) where:
+               - features: Game state tensor of shape (batch_size, channels, height, width)
+               - mask: Valid position mask of shape (batch_size, 1, height, width)
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Processed (features, mask) with:
+            - features: Updated game state incorporating global dependencies
+            - mask: Unchanged input mask for maintaining valid positions
+
+        Processing steps:
+        1. Layer normalization for training stability
+        2. Multi-head self-attention for global context
+        3. Residual connection to preserve spatial information
+        4. MLP processing for feature transformation
+        5. Final residual connection and masking
+        """
         x, input_mask = x
         identity = x
         x = self.mhsa(self.norm1(x), input_mask)

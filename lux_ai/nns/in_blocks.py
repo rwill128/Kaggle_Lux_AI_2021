@@ -1,3 +1,20 @@
+"""
+Input processing layers for the Lux AI agent's neural network.
+
+This module handles the conversion of raw game observations into feature maps:
+1. Processes both continuous and discrete (MultiDiscrete/MultiBinary) inputs
+2. Handles player-specific observations with symmetric processing
+3. Combines embeddings and continuous features through convolutional layers
+4. Supports counting-based features for unit stacking
+
+Key Features:
+- Efficient embedding lookup with optional index_select optimization
+- Flexible player embedding merging (sum or concatenate)
+- Handles multiple observation spaces with prefixing
+- Maintains spatial structure through 1x1 convolutions
+- Supports unit counting for stacked unit processing
+"""
+
 import gym.spaces
 import numpy as np
 import torch
@@ -6,18 +23,58 @@ from typing import Callable, Dict, Optional, Tuple, Union
 
 
 def _index_select(embedding_layer: nn.Embedding, x: torch.Tensor) -> torch.Tensor:
+    """
+    Optimized embedding lookup using index_select.
+    
+    This method provides a potentially faster alternative to the default
+    embedding forward pass, though it disables padding_idx functionality.
+    
+    Args:
+        embedding_layer: The embedding layer to look up weights from
+        x: Input tensor of indices
+        
+    Returns:
+        Tensor of embeddings with shape (*x.shape, embedding_dim)
+    """
     out = embedding_layer.weight.index_select(0, x.view(-1))
     return out.view(*x.shape, -1)
 
 
 def _forward_select(embedding_layer: nn.Embedding, x: torch.Tensor) -> torch.Tensor:
+    """
+    Standard embedding lookup using the layer's forward pass.
+    
+    This method uses the default PyTorch embedding lookup, which supports
+    all embedding features including padding_idx.
+    
+    Args:
+        embedding_layer: The embedding layer to look up from
+        x: Input tensor of indices
+        
+    Returns:
+        Tensor of embeddings
+    """
     return embedding_layer(x)
 
 
 def _get_select_func(use_index_select: bool) -> Callable:
     """
-    Use index select instead of default forward to possibly speed up embedding.
-    NB: This disables padding_idx functionality
+    Select the embedding lookup implementation based on performance vs. functionality.
+    
+    This function chooses between two embedding lookup implementations:
+    1. index_select: Potentially faster but disables padding_idx functionality
+    2. forward: Standard PyTorch implementation with full feature support
+    
+    Args:
+        use_index_select: Whether to use the optimized index_select implementation
+        
+    Returns:
+        Function that implements the chosen embedding lookup strategy
+    
+    Note:
+        The index_select implementation may provide better performance but
+        sacrifices padding_idx functionality, which can be important for
+        handling missing or masked values in the input.
     """
     if use_index_select:
         return _index_select
@@ -26,16 +83,60 @@ def _get_select_func(use_index_select: bool) -> Callable:
 
 
 def _player_sum(x: torch.Tensor) -> torch.Tensor:
+    """
+    Sum embeddings across the player dimension.
+    
+    This merging strategy creates player-invariant features by adding
+    embeddings from both players, useful when the order of players
+    should not affect the network's behavior.
+    
+    Args:
+        x: Input tensor with shape (batch, players, features, ...)
+        
+    Returns:
+        Tensor with player dimension summed out
+    """
     return x.sum(dim=1)
 
 
 def _player_cat(x: torch.Tensor) -> torch.Tensor:
+    """
+    Concatenate embeddings across the player dimension.
+    
+    This merging strategy preserves player-specific information by
+    keeping embeddings from different players separate, allowing the
+    network to learn player-dependent patterns.
+    
+    Args:
+        x: Input tensor with shape (batch, players, features, ...)
+        
+    Returns:
+        Tensor with player and feature dimensions flattened together
+    """
     return torch.flatten(x, start_dim=1, end_dim=2)
 
 
 def _get_player_embedding_merge_func(sum_player_embeddings: bool) -> Callable:
     """
-    Whether to sum or concatenate player and opponent embeddings
+    Select the strategy for combining player embeddings.
+    
+    This function chooses between two approaches for handling player embeddings:
+    1. Summation: Creates player-invariant features, reducing parameters
+       and enforcing symmetry in the network's behavior
+    2. Concatenation: Preserves player-specific information, allowing
+       the network to learn different patterns for each player
+    
+    Args:
+        sum_player_embeddings: If True, sum player embeddings; if False,
+                             concatenate them
+        
+    Returns:
+        Function implementing the chosen embedding merge strategy
+        
+    Note:
+        The choice between summing and concatenating affects both the
+        network's capacity and its ability to learn player-specific
+        strategies vs. player-invariant patterns.
     """
     if sum_player_embeddings:
         return _player_sum
@@ -44,10 +145,39 @@ def _get_player_embedding_merge_func(sum_player_embeddings: bool) -> Callable:
 
 
 class DictInputLayer(nn.Module):
+    """
+    Basic input layer that processes dictionary observations.
+    
+    This layer extracts and organizes the key components from observation
+    dictionaries:
+    - Raw observations
+    - Input masks for valid positions
+    - Action masks for valid actions
+    - Optional subtask embeddings
+    """
     @staticmethod
     def forward(
             x: Dict[str, Union[Dict, torch.Tensor]]
     ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, Dict[str, torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Extract key components from the observation dictionary.
+        
+        Args:
+            x: Dictionary containing:
+               - 'obs': Raw observations
+               - 'info': Dictionary with masks and embeddings
+        
+        Returns:
+            Tuple containing:
+            - Dictionary of raw observations
+            - Input mask tensor
+            - Dictionary of available action masks
+            - Optional subtask embedding tensor
+            
+        This method organizes the input data into a standardized format
+        expected by the rest of the network, separating observations,
+        masks, and embeddings.
+        """
         return (x["obs"],
                 x["info"]["input_mask"],
                 x["info"]["available_actions_mask"],
@@ -55,6 +185,32 @@ class DictInputLayer(nn.Module):
 
 
 class ConvEmbeddingInputLayer(nn.Module):
+    """
+    Sophisticated input processing layer that converts observations to feature maps.
+    
+    This layer handles:
+    1. Processing different observation types:
+       - Discrete observations through embeddings
+       - Continuous observations through 1x1 convolutions
+       - Count-based features for unit stacking
+    2. Player perspective handling:
+       - Duplicates observations for both players
+       - Swaps player axes for symmetric processing
+    3. Feature combination:
+       - Merges embeddings through sum or concatenation
+       - Processes continuous features separately
+       - Combines all features through convolutional layers
+    
+    Args:
+        obs_space: Dictionary observation space specification
+        embedding_dim: Dimension of embedding vectors
+        out_dim: Output feature dimension
+        n_merge_layers: Number of layers for merging features
+        sum_player_embeddings: Whether to sum (True) or concatenate (False) player embeddings
+        use_index_select: Whether to use optimized embedding lookup
+        activation: Activation function for convolutional layers
+        obs_space_prefix: Optional prefix for observation space keys
+    """
     def __init__(
             self,
             obs_space: gym.spaces.Dict,
@@ -150,9 +306,38 @@ class ConvEmbeddingInputLayer(nn.Module):
 
     def forward(self, x: Tuple[Dict[str, torch.Tensor], torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Expects x to be a dictionary of tensors of shape (b, n, p|1, x, y) or (b, n, p|1)
-        Returns an output of shape (b * 2, embedding_dim, x, y) where the observation has been duplicated and the
-        player axes swapped for the opposing players
+        Process observations into feature maps suitable for the neural network.
+        
+        This method implements a sophisticated pipeline for converting raw
+        observations into learned features:
+        1. Handles different input types:
+           - Discrete inputs through embeddings
+           - Continuous inputs through convolutions
+           - Count-based features for unit stacking
+        2. Processes player perspectives:
+           - Duplicates observations for both players
+           - Swaps player axes for symmetric processing
+        3. Combines features:
+           - Merges player embeddings (sum or concatenate)
+           - Processes continuous features
+           - Combines all features through conv layers
+        
+        Args:
+            x: Tuple containing:
+               - Dictionary mapping observation keys to tensors of shape
+                 (batch, channels, players|1, height, width) or
+                 (batch, channels, players|1)
+               - Input mask tensor indicating valid positions
+        
+        Returns:
+            Tuple containing:
+            - Feature maps of shape (batch*2, out_dim, height, width)
+              where batch is duplicated for both player perspectives
+            - Updated input mask
+            
+        The output feature maps maintain spatial structure while encoding
+        both player-specific and player-invariant patterns, suitable for
+        processing by subsequent network layers.
         """
         x, input_mask = x
         input_mask = torch.repeat_interleave(input_mask, 2, dim=0)
