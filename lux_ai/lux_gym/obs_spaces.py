@@ -20,26 +20,105 @@ P = 2
 
 
 class BaseObsSpace(ABC):
-    # NB: Avoid using Discrete() space, as it returns a shape of ()
-    # NB: "_COUNT" keys indicate that the value is used to scale the embedding of another value
+    """
+    Abstract base class for observation spaces in the Lux AI environment.
+    
+    This class defines the interface for observation spaces that convert game states
+    into structured representations suitable for RL agents. Key concepts:
+    
+    1. Observation Structure:
+       - Returns a gym.spaces.Dict defining the shape and type of each observation
+       - Supports both spatial (board state) and non-spatial (research, turn) features
+       - Handles variable board sizes up to MAX_BOARD_SIZE
+    
+    2. Environment Wrapping:
+       - Provides a gym.Wrapper that converts Game objects to observation tensors
+       - Ensures consistent observation format for the RL agent
+    
+    Notes:
+        - Avoid using Discrete() space as it returns shape ()
+        - "_COUNT" keys indicate values used to scale embeddings of other values
+    """
     @abstractmethod
     def get_obs_spec(
             self,
             board_dims: Tuple[int, int] = MAX_BOARD_SIZE
     ) -> gym.spaces.Dict:
+        """
+        Get the observation space specification.
+        
+        Args:
+            board_dims: Tuple of (width, height) for the game board
+                      Defaults to MAX_BOARD_SIZE for maximum compatibility
+        
+        Returns:
+            A gym.spaces.Dict specifying the structure of observations
+        """
         pass
 
     @abstractmethod
     def wrap_env(self, env) -> gym.Wrapper:
+        """
+        Create a wrapper that converts game states to observation tensors.
+        
+        Args:
+            env: The Lux environment to wrap
+            
+        Returns:
+            A gym.Wrapper that implements the observation conversion
+        """
         pass
 
 
 class FixedShapeObs(BaseObsSpace, ABC):
+    """
+    Abstract base class for observation spaces with fixed tensor shapes.
+    
+    This class serves as a marker for observation spaces that maintain consistent
+    tensor dimensions regardless of the game state. This is important for:
+    
+    1. Neural Network Compatibility:
+       - Ensures inputs have consistent shapes for network layers
+       - Allows batch processing of observations
+    
+    2. Performance:
+       - Avoids dynamic tensor allocation
+       - Enables efficient GPU utilization
+    
+    All fixed shape implementations should:
+    - Pre-allocate tensors of maximum size
+    - Use padding/masking for variable content
+    - Maintain consistent dimensions across episodes
+    """
     pass
 
 
 class MultiObs(BaseObsSpace):
+    """
+    Combines multiple observation spaces into a single observation dictionary.
+    
+    This class enables the composition of different observation types, allowing
+    the RL agent to receive multiple views of the game state. Use cases include:
+    
+    1. Multi-Modal Observations:
+       - Combining spatial and non-spatial features
+       - Using different encodings for different aspects of state
+    
+    2. Hierarchical Observations:
+       - High-level strategic information
+       - Low-level tactical details
+    
+    The combined observation maintains the structure of each sub-space while
+    prefixing keys to avoid naming conflicts.
+    """
     def __init__(self, named_obs_spaces: Dict[str, BaseObsSpace], *args, **kwargs):
+        """
+        Initialize with a dictionary of named observation spaces.
+        
+        Args:
+            named_obs_spaces: Dictionary mapping names to observation spaces
+            *args, **kwargs: Additional arguments passed to BaseObsSpace
+        """
         super(MultiObs, self).__init__(*args, **kwargs)
         self.named_obs_spaces = named_obs_spaces
 
@@ -58,7 +137,27 @@ class MultiObs(BaseObsSpace):
 
 
 class _MultiObsWrapper(gym.Wrapper):
+    """
+    Internal wrapper class for MultiObs that combines observations from multiple spaces.
+    
+    This wrapper:
+    1. Creates individual wrappers for each observation space
+    2. Combines their outputs with appropriate name prefixes
+    3. Maintains the gym.Env interface contract
+    
+    The wrapper ensures that:
+    - All sub-space observations are computed efficiently
+    - Name conflicts are avoided through prefixing
+    - The gym.Env interface remains consistent
+    """
     def __init__(self, env, named_obs_spaces: Dict[str, BaseObsSpace]):
+        """
+        Initialize with environment and observation spaces.
+        
+        Args:
+            env: The environment to wrap
+            named_obs_spaces: Dictionary of name -> observation space mappings
+        """
         super(_MultiObsWrapper, self).__init__(env)
         self.named_obs_space_wrappers = {key: val.wrap_env(env) for key, val in named_obs_spaces.items()}
 
@@ -244,6 +343,25 @@ class _FixedShapeContinuousObsWrapper(gym.Wrapper):
 
 
 class FixedShapeContinuousObsV2(FixedShapeObs):
+    """
+    Enhanced version of FixedShapeContinuousObs with additional spatial features.
+    
+    Key Improvements over V1:
+    1. Distance Features:
+       - Adds distance-from-center metrics for both X and Y axes
+       - Helps model understand spatial relationships and board positioning
+       
+    2. Board Size Information:
+       - Explicitly encodes the current map dimensions
+       - Enables better generalization across different board sizes
+       
+    3. Normalized Features:
+       - All continuous values scaled to [0,1] range
+       - Consistent with V1 but adds new normalized spatial features
+       
+    The observation space maintains backward compatibility while adding
+    new features that help the model understand board geometry better.
+    """
     def get_obs_spec(
             self,
             board_dims: Tuple[int, int] = MAX_BOARD_SIZE
@@ -322,6 +440,19 @@ class FixedShapeContinuousObsV2(FixedShapeObs):
 
 class _FixedShapeContinuousObsWrapperV2(gym.Wrapper):
     def __init__(self, env: gym.Env):
+        """
+        Initialize V2 wrapper with empty observation tensors.
+        
+        Creates pre-allocated tensors for all observation types including:
+        - Unit positions and properties
+        - Resource locations and quantities
+        - City tile states
+        - Spatial distance features
+        - Global game state information
+        
+        Args:
+            env: The Lux environment to wrap
+        """
         super(_FixedShapeContinuousObsWrapperV2, self).__init__(env)
         self._empty_obs = {}
         for key, spec in FixedShapeContinuousObsV2().get_obs_spec().spaces.items():
@@ -418,12 +549,38 @@ class _FixedShapeContinuousObsWrapperV2(gym.Wrapper):
     @staticmethod
     @functools.lru_cache(maxsize=None)
     def get_dist_from_center_x(map_height: int, map_width: int) -> np.ndarray:
+        """
+        Calculate normalized X-axis distances from board center for each cell.
+        
+        Uses LRU cache to avoid recomputing for same board dimensions.
+        Values are normalized to [0,1] where 0 is center and 1 is edge.
+        
+        Args:
+            map_height: Height of the game board
+            map_width: Width of the game board
+            
+        Returns:
+            Array of shape [1,1,height,width] with normalized X-distances
+        """
         pos = np.linspace(0, 2, map_width, dtype=np.float32)[None, :].repeat(map_height, axis=0)
         return np.abs(1 - pos)[None, None, :, :]
 
     @staticmethod
     @functools.lru_cache(maxsize=None)
     def get_dist_from_center_y(map_height: int, map_width: int) -> np.ndarray:
+        """
+        Calculate normalized Y-axis distances from board center for each cell.
+        
+        Uses LRU cache to avoid recomputing for same board dimensions.
+        Values are normalized to [0,1] where 0 is center and 1 is edge.
+        
+        Args:
+            map_height: Height of the game board
+            map_width: Width of the game board
+            
+        Returns:
+            Array of shape [1,1,height,width] with normalized Y-distances
+        """
         pos = np.linspace(0, 2, map_height)[:, None].repeat(map_width, axis=1)
         return np.abs(1 - pos)[None, None, :, :]
 
@@ -539,6 +696,22 @@ class _FixedShapeEmbeddingObsWrapper(gym.Wrapper):
         return self.observation(observation), reward, done, info
 
     def observation(self, observation: Game) -> Dict[str, np.ndarray]:
+        """
+        Convert game state to sequence-based observation tensors.
+        
+        Args:
+            observation: Current game state
+            
+        Returns:
+            Dictionary mapping feature names to observation tensors.
+            Each tensor has shape (P, 1, seq_len) for entity features
+            or appropriate shape for global features.
+            
+        Note:
+            - Entity sequences are padded to fixed length
+            - Features are normalized to [0,1] range
+            - Order of entities affects model input but not game state
+        """
         max_research = max(GAME_CONSTANTS["PARAMETERS"]["RESEARCH_REQUIREMENTS"].values())
 
         obs = {

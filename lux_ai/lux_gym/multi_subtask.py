@@ -8,6 +8,30 @@ from ..lux.game import Game
 
 
 class SubtaskSampler(ABC):
+    """
+    Abstract base class for sampling subtasks in curriculum learning.
+    
+    This class provides a framework for:
+    1. Task Selection:
+       - Maintains pool of available subtasks
+       - Implements sampling strategy
+       - Tracks task performance
+       
+    2. Curriculum Learning:
+       - Progressive task difficulty
+       - Performance-based selection
+       - Adaptive learning paths
+       
+    3. Implementation Interface:
+       - Abstract sample() method
+       - Optional performance tracking
+       - Extensible for custom strategies
+       
+    Args:
+        subtask_constructors: Sequence of callable constructors for creating
+                            subtask instances. Each constructor should return
+                            a Subtask object when called.
+    """
     def __init__(self, subtask_constructors: Sequence[Callable[..., Subtask]]):
         self.subtask_constructors = subtask_constructors
 
@@ -17,15 +41,66 @@ class SubtaskSampler(ABC):
 
     # noinspection PyMethodMayBeStatic
     def get_info(self) -> Dict[str, np.ndarray]:
+        """
+        Get debugging and logging information for the sampler.
+        
+        Returns:
+            Dict[str, np.ndarray]: Empty dictionary by default.
+                                 Subclasses may override to provide
+                                 sampling statistics.
+        """
         return {}
 
 
 class RandomSampler(SubtaskSampler):
+    """
+    Simple uniform random subtask sampler.
+    
+    Features:
+    1. Sampling Strategy:
+       - Uniform random selection
+       - No performance tracking
+       - Equal probability for all tasks
+       
+    2. Use Cases:
+       - Initial exploration
+       - Baseline comparison
+       - Task-agnostic training
+       
+    3. Implementation:
+       - Ignores final_rewards
+       - Simple random.randrange
+       - No state maintenance
+    """
     def sample(self, final_rewards: Optional[Tuple[float, float]]) -> Subtask:
         return self.subtask_constructors[random.randrange(len(self.subtask_constructors))]()
 
 
 class DifficultySampler(SubtaskSampler):
+    """
+    Performance-based subtask sampler for adaptive curriculum learning.
+    
+    Features:
+    1. Adaptive Sampling:
+       - Tracks task performance
+       - Weights tasks by difficulty
+       - Focuses on challenging tasks
+       
+    2. Performance Tracking:
+       - Maintains success rates
+       - Updates per-task statistics
+       - Computes sampling weights
+       
+    3. Implementation Details:
+       - Uses running averages
+       - Inverse difficulty weighting
+       - Normalized probabilities
+       
+    This sampler implements curriculum learning by:
+    - Tracking average rewards per subtask
+    - Favoring tasks with lower success rates
+    - Automatically adjusting task distribution
+    """
     def __init__(self, subtask_constructors: Sequence[Callable[..., Subtask]]):
         super(DifficultySampler, self).__init__(subtask_constructors)
         self.active_subtask_idx = -1
@@ -46,6 +121,14 @@ class DifficultySampler(SubtaskSampler):
         return weights / weights.sum()
 
     def get_info(self) -> Dict[str, np.ndarray]:
+        """
+        Get difficulty-based sampling statistics.
+        
+        Returns:
+            Dict[str, np.ndarray]: Dictionary mapping each subtask name
+                                 to its current sampling difficulty weight.
+                                 Higher values indicate more challenging tasks.
+        """
         return {
             f"LOGGING_{subtask.__name__}_subtask_difficulty": self.weights[i]
             for i, subtask in enumerate(self.subtask_constructors)
@@ -53,6 +136,32 @@ class DifficultySampler(SubtaskSampler):
 
 
 class MultiSubtask(Subtask):
+    """
+    Manager class for handling multiple subtasks with dynamic selection.
+    
+    This class provides:
+    1. Task Management:
+       - Maintains subtask pool
+       - Handles task transitions
+       - Tracks active subtask
+       
+    2. Reward Processing:
+       - Delegates to active subtask
+       - Records per-subtask rewards
+       - Manages task completion
+       
+    3. Information Tracking:
+       - Logs subtask performance
+       - Maintains task statistics
+       - Provides debugging info
+       
+    Args:
+        subtask_constructors: Sequence of callable constructors for creating
+                            subtask instances
+        subtask_sampler_constructor: Constructor for the sampling strategy,
+                                   defaults to RandomSampler
+        **kwargs: Additional arguments passed to parent Subtask
+    """
     def __init__(
             self,
             subtask_constructors: Sequence[Callable[..., Subtask]] = (),
@@ -84,6 +193,14 @@ class MultiSubtask(Subtask):
         raise NotImplementedError
 
     def get_info(self) -> Dict[str, np.ndarray]:
+        """
+        Get combined information from active subtask and sampler.
+        
+        Returns:
+            Dict[str, np.ndarray]: Merged dictionary containing:
+                                 - Per-subtask reward information
+                                 - Sampler statistics and metrics
+        """
         return dict(**self.info, **self.subtask_sampler.get_info())
 
     def get_subtask_encoding(self, subtask_encoding_dict: dict) -> int:

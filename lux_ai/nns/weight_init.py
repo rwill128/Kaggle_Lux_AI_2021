@@ -57,17 +57,31 @@ def trunc_normal_(
         a: float = -2.,
         b: float = 2.
 ) -> torch.Tensor:
-    r"""Fills the input Tensor with values drawn from a truncated
-    normal distribution. The values are effectively drawn from the
-    normal distribution :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
-    with values outside :math:`[a, b]` redrawn until they are within
-    the bounds. The method used for generating the random values works
-    best when :math:`a \leq \text{mean} \leq b`.
+    r"""Initialize tensor using truncated normal distribution.
+    
+    Fills the input tensor with values drawn from a truncated normal distribution,
+    which is particularly useful for neural network weight initialization to prevent
+    extreme values while maintaining approximately normal distribution properties.
+    
+    The values are drawn from :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
+    with values outside :math:`[a, b]` redrawn until they are within bounds.
+    
     Args:
-        tensor: an n-dimensional `torch.Tensor`
-        mean: the mean of the normal distribution
-        std: the standard deviation of the normal distribution
-        a: the minimum cutoff value
-        b: the maximum cutoff value
+        tensor: The tensor to be initialized
+        mean: The mean (μ) of the normal distribution, default 0.0
+        std: The standard deviation (σ) of the normal distribution, default 1.0
+        a: The minimum cutoff value, default -2.0
+        b: The maximum cutoff value, default 2.0
+        
+    Returns:
+        torch.Tensor: The initialized tensor
+        
+    Note:
+        The method works best when :math:`a \leq \text{mean} \leq b` as this
+        ensures efficient sampling from the truncated distribution.
+        
+    Example:
+        >>> weight = torch.empty(3, 5)
+        >>> trunc_normal_(weight, mean=0.0, std=0.02, a=-0.04, b=0.04)
     """
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)

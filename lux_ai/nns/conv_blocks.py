@@ -85,6 +85,21 @@ class ResidualBlock(nn.Module):
             self.squeeze_excitation = nn.Identity()
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process input through residual block with masking.
+        
+        Args:
+            x: Tuple of (input tensor, input mask)
+               - input tensor: (batch, channels, height, width)
+               - input mask: Binary mask of valid positions
+               
+        Returns:
+            Tuple of (output tensor, output mask) with same shapes
+            
+        Note:
+            Applies residual connection and maintains masking
+            throughout the computation.
+        """
         x, input_mask = x
         identity = x
         x = self.conv1(x) * input_mask
@@ -189,6 +204,21 @@ class ParallelDilationResidualBlock(nn.Module):
             self.change_n_channels = nn.Identity()
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process input through parallel standard and dilated paths.
+        
+        Args:
+            x: Tuple of (input tensor, input mask)
+               - input tensor: (batch, channels, height, width)
+               - input mask: Binary mask of valid positions
+               
+        Returns:
+            Tuple of (output tensor, output mask) with same shapes
+            
+        Note:
+            Combines features from both standard and dilated paths
+            while maintaining masking throughout computation.
+        """
         x_orig, input_mask = x
 
         # Main branch

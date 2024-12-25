@@ -33,7 +33,59 @@ def pos_to_loc(pos: Tuple[int, int], board_dims: Tuple[int, int] = MAX_BOARD_SIZ
 
 
 class RLAgent:
+    """
+    Reinforcement Learning agent for the Lux AI competition.
+    
+    This agent:
+    1. Processes game observations through a custom gym environment
+    2. Uses a trained neural network for action selection
+    3. Handles data augmentation for improved robustness
+    4. Implements collision detection and action validation
+    
+    Architecture:
+    - Environment Wrappers:
+        - RewardSpaceWrapper: Custom reward computation
+        - PadFixedShapeEnv: Consistent tensor dimensions
+        - VecEnv: Parallel environment processing
+        - PytorchEnv: Tensor conversion
+        - DictEnv: Standardized outputs
+        
+    - Neural Network:
+        - Policy network for action selection
+        - Value network for state evaluation
+        - Supports multiple data augmentations
+        
+    - Game Logic:
+        - Manages city tiles, workers, and carts
+        - Handles resource collection and city building
+        - Implements research and unit production
+        
+    Args:
+        obs: Initial game observation
+        conf: Game configuration parameters
+    """
     def __init__(self, obs, conf):
+        """
+        Initialize the RL agent with game configuration and model setup.
+        
+        Process:
+        1. Load model and agent configurations
+        2. Set up GPU/CPU device placement
+        3. Initialize environment wrappers
+        4. Load pre-trained model weights
+        5. Set up data augmentation pipeline
+        6. Initialize game state tracking
+        
+        Args:
+            obs: Initial game observation containing:
+                - player: Current player ID
+                - step: Current game step
+                - updates: Game state updates
+            conf: Game configuration with:
+                - episode length
+                - map dimensions
+                - resource parameters
+        """
         with open(MODEL_CONFIG_PATH, 'r') as f:
             self.model_flags = flags_to_namespace(yaml.safe_load(f))
         with open(RL_AGENT_CONFIG_PATH, 'r') as f:
@@ -96,6 +148,29 @@ class RLAgent:
         self.stopwatch = Stopwatch()
 
     def __call__(self, obs, conf, raw_model_output: bool = False):
+        """
+        Process game observation and select actions using the trained model.
+        
+        Pipeline:
+        1. Preprocess observation and update game state
+        2. Apply data augmentations for robust predictions
+        3. Run model inference to get action probabilities
+        4. Resolve collisions and validate actions
+        5. Add debugging annotations if in local evaluation
+        
+        Args:
+            obs: Current game observation
+            conf: Game configuration
+            raw_model_output: If True, return model predictions instead of actions
+            
+        Returns:
+            List[str]: Valid game actions for current player
+            or Dict: Raw model outputs if raw_model_output=True
+            
+        Performance:
+            - Tracks timing for observation processing, inference, collision detection
+            - Adapts data augmentation based on remaining computation time
+        """
         self.stopwatch.reset()
 
         self.stopwatch.start("Observation processing")
@@ -154,6 +229,31 @@ class RLAgent:
         return actions
 
     def preprocess(self, obs, conf) -> NoReturn:
+        """
+        Update game state and prepare for action selection.
+        
+        Key Functions:
+        1. Game State Management:
+           - Updates game state with new observations
+           - Synchronizes turn count and player IDs
+           
+        2. Unit Tracking:
+           - Maps actionable units to their locations
+           - Separates workers and carts
+           - Tracks city tile positions and states
+           
+        3. Performance Optimization: 
+           - Removes data augmentations if low on computation time
+           - Maintains dictionaries for O(1) unit lookup
+        
+        Args:
+            obs: Current game observation with updates
+            conf: Game configuration parameters
+            
+        Important:
+            Do not call manual_step on the first turn to avoid
+            off-by-1 turn desynchronization throughout the game
+        """
         # Do not call manual_step on the first turn, or you will be off-by-1 turn the entire game
         if obs["step"] > 0:
             self.unwrapped_env.manual_step(obs["updates"])
@@ -233,6 +333,34 @@ class RLAgent:
         }
 
     def resolve_collision_detection(self, obs, agent_output) -> List[str]:
+        """
+        Validate and modify actions to prevent illegal moves and collisions.
+        
+        This method implements a priority-based system to:
+        1. Process city tile actions:
+           - Respect unit production limits
+           - Manage research points
+           - Handle end-game restrictions
+           
+        2. Process unit actions:
+           - Prevent unit collisions
+           - Validate movement boundaries
+           - Allow city tile stacking
+           
+        Strategy:
+        - Uses log probabilities to prioritize actions
+        - Modifies illegal actions by setting probability to -inf
+        - Maintains game rules and unit constraints
+        
+        Args:
+            obs: Current game observation
+            agent_output: Model predictions containing:
+                - policy_logits: Action probabilities
+                - actions: Selected actions
+                
+        Returns:
+            List[str]: Valid actions for the current player
+        """
         # Get log_probs for all of my actions
         flat_log_probs = {
             key: torch.flatten(
@@ -364,6 +492,23 @@ class RLAgent:
         return actions
 
     def get_transfer_annotations(self, actions: List[str]) -> List[str]:
+        """
+        Generate visual annotations for resource transfers between units.
+        
+        Creates:
+        1. Lines connecting units involved in transfers
+        2. X markers indicating transfer destinations
+        
+        Args:
+            actions: List of game actions to process
+            
+        Returns:
+            List[str]: Annotation commands for visualization
+            
+        Note:
+            Only processes transfer actions ('t' commands)
+            Used primarily for local evaluation and debugging
+        """
         annotations = []
         for act in actions:
             act_split = act.split(" ")
@@ -379,19 +524,62 @@ class RLAgent:
 
     @property
     def unwrapped_env(self) -> LuxEnv:
+        """
+        Access the base LuxEnv instance without wrappers.
+        
+        Returns:
+            LuxEnv: Unwrapped environment for direct game state access
+        """
         return self.env.unwrapped[0]
 
     @property
     def game_state(self) -> Game:
+        """
+        Access the current game state.
+        
+        Returns:
+            Game: Current game state containing:
+                - Map information
+                - Player states
+                - Unit positions
+                - Resource locations
+        """
         return self.unwrapped_env.game_state
 
     # Helper functions for debugging
     def set_to_turn_and_call(self, turn: int, *args, **kwargs):
+        """
+        Debug helper to simulate agent at specific game turn.
+        
+        Args:
+            turn: Target game turn to simulate
+            *args: Arguments to pass to __call__
+            **kwargs: Keyword arguments to pass to __call__
+            
+        Returns:
+            Same as __call__ method
+            
+        Note:
+            Primarily used for debugging and testing
+        """
         self.game_state.turn = max(turn - 1, 0)
         return self(*args, **kwargs)
 
 
 def agent(obs, conf) -> List[str]:
+    """
+    Entry point for the Lux AI agent.
+    
+    Creates or reuses a global RLAgent instance and processes
+    the current game observation.
+    
+    Args:
+        obs: Game observation from environment
+        conf: Game configuration parameters
+        
+    Returns:
+        List[str]: Valid actions for current game state
+    """
     global AGENT
     if AGENT is None:
         AGENT = RLAgent(obs, conf)

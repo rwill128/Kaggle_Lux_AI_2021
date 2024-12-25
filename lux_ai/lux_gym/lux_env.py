@@ -106,6 +106,17 @@ class LuxEnv(gym.Env):
         self._restart_dimension_process()
 
     def _restart_dimension_process(self) -> NoReturn:
+        """
+        Start or restart the Node.js dimension process used for game simulation.
+        
+        This process handles the actual game logic and state updates. We communicate
+        with it via stdin/stdout to send actions and receive observations. The process
+        is restarted periodically to prevent memory leaks.
+        
+        The process is started with:
+        1. Pipes for stdin/stdout/stderr communication
+        2. A background thread to handle stdout asynchronously
+        """
         if self._dimension_process is not None:
             self._dimension_process.kill()
         if self.run_game_automatically:
@@ -185,6 +196,20 @@ class LuxEnv(gym.Env):
         return self.game_state, rewards, self.done, copy.copy(self.info)
 
     def process_actions(self, action: Dict[str, np.ndarray]) -> Tuple[List[List[str]], Dict[str, np.ndarray]]:
+        """
+        Convert network action outputs into game commands.
+        
+        Processes raw network outputs through the action space to generate valid
+        game commands and track which actions were actually taken.
+        
+        Args:
+            action: Dictionary mapping action types to numpy arrays of action logits
+            
+        Returns:
+            Tuple containing:
+            - List of game command strings for both players
+            - Dictionary tracking which actions were actually taken
+        """
         return self.action_space.process_actions(
             action,
             self.game_state,
@@ -193,35 +218,58 @@ class LuxEnv(gym.Env):
         )
 
     def _step(self, action: List[List[str]]) -> NoReturn:
-        # 2.: Pass in actions (json representation along with id of who made that action),
-        #       and agent information (id, status) to dimensions via stdin
+        """
+        Execute actions in the game environment via the Node.js process.
+        
+        This internal method handles the communication protocol with the dimension
+        process:
+        1. Sends actions as JSON via stdin
+        2. Receives and processes game state updates via stderr
+        3. Checks for game completion
+        4. Handles any error output from the process
+        
+        Args:
+            action: List of action lists for both players (must be length 2)
+        """
+        # Send actions to dimension process
         assert len(action) == 2
-        # TODO: Does dimension process state need to include info other than actions?
         state = [{'action': a} for a in action]
         self._dimension_process.stdin.write((json.dumps(state) + "\n").encode())
         self._dimension_process.stdin.flush()
 
-        # 3.1 : Receive and parse the observations returned by dimensions via stdout
+        # Receive and process game state updates
         agent1res = json.loads(self._dimension_process.stderr.readline())
-        # Skip agent2res and match_obs_meta
+        # Skip agent2res and match_obs_meta since we only need player 1's view
         _ = self._dimension_process.stderr.readline(), self._dimension_process.stderr.readline()
         self.game_state._update(agent1res)
 
-        # Check if done
+        # Check if game is complete
         match_status = json.loads(self._dimension_process.stderr.readline())
         self.done = match_status["status"] == "finished"
 
+        # Process any error output from dimension process
         while True:
             try:
                 line = self._q.get_nowait()
             except Empty:
-                # no standard error received, break
+                # No more error output to process
                 break
             else:
-                # standard error output received, print it out
+                # Print error output to stderr
                 print(line.decode(), file=sys.stderr, end='')
 
     def _update_internal_state(self) -> NoReturn:
+        """
+        Update internal state tracking after game state changes.
+        
+        This includes:
+        1. Regenerating position-to-unit mapping
+        2. Regenerating position-to-city mapping
+        3. Updating available action masks based on new game state
+        
+        These updates ensure that action processing and validation use
+        the latest game state information.
+        """
         self.pos_to_unit_dict = _generate_pos_to_unit_dict(self.game_state)
         self.pos_to_city_tile_dict = _generate_pos_to_city_tile_dict(self.game_state)
         self.info["available_actions_mask"] = self.action_space.get_available_actions_mask(
@@ -232,6 +280,15 @@ class LuxEnv(gym.Env):
         )
 
     def seed(self, seed: Optional[int] = None) -> NoReturn:
+        """
+        Set the random seed for the environment.
+        
+        The seed is decremented by 1 because it will be incremented in reset().
+        If no seed is provided, generates a random seed.
+        
+        Args:
+            seed: Integer seed for reproducibility (optional)
+        """
         if seed is not None:
             # Seed is incremented on reset()
             self.configuration["seed"] = seed - 1
@@ -239,7 +296,25 @@ class LuxEnv(gym.Env):
             self.configuration["seed"] = math.floor(random.random() * 1e9)
 
     def get_seed(self) -> int:
+        """
+        Get the current random seed.
+        
+        Returns:
+            Current seed value from configuration
+        """
         return self.configuration["seed"]
 
     def render(self, mode='human'):
+        """
+        Render the environment for visualization.
+        
+        This method is not implemented as the Lux AI competition provides
+        its own visualizer for replays.
+        
+        Args:
+            mode: Rendering mode (unused)
+            
+        Raises:
+            NotImplementedError: Always raises this error
+        """
         raise NotImplementedError('LuxEnv rendering is not implemented. Use the Lux visualizer instead.')

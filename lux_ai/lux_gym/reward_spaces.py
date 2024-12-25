@@ -11,14 +11,46 @@ from ..lux.game_objects import Player
 
 
 def count_city_tiles(game_state: Game) -> np.ndarray:
+    """
+    Count the number of city tiles owned by each player.
+    
+    Args:
+        game_state: Current game state containing player information
+        
+    Returns:
+        numpy array of shape (2,) containing city tile counts for each player
+    """
     return np.array([player.city_tile_count for player in game_state.players])
 
 
 def count_units(game_state: Game) -> np.ndarray:
+    """
+    Count the total number of units (workers and carts) owned by each player.
+    
+    Args:
+        game_state: Current game state containing player information
+        
+    Returns:
+        numpy array of shape (2,) containing unit counts for each player
+    """
     return np.array([len(player.units) for player in game_state.players])
 
 
 def count_total_fuel(game_state: Game) -> np.ndarray:
+    """
+    Calculate the total fuel stored in all cities for each player.
+    
+    This is important for:
+    - Surviving night cycles
+    - Maintaining city tiles
+    - Strategic resource management
+    
+    Args:
+        game_state: Current game state containing player information
+        
+    Returns:
+        numpy array of shape (2,) containing total fuel amounts for each player
+    """
     return np.array([
         sum([city.fuel for city in player.cities.values()])
         for player in game_state.players
@@ -26,10 +58,41 @@ def count_total_fuel(game_state: Game) -> np.ndarray:
 
 
 def count_research_points(game_state: Game) -> np.ndarray:
+    """
+    Get the current research points accumulated by each player.
+    
+    Research points are used to:
+    - Unlock coal resource collection
+    - Unlock uranium resource collection
+    - Enable strategic resource progression
+    
+    Args:
+        game_state: Current game state containing player information
+        
+    Returns:
+        numpy array of shape (2,) containing research points for each player
+    """
     return np.array([player.research_points for player in game_state.players])
 
 
 def should_early_stop(game_state: Game) -> bool:
+    """
+    Determine if the game should end early based on player dominance.
+    
+    The game ends early if:
+    - Any player has lost all city tiles
+    - Any player has lost all units
+    - Any player controls >= 75% of all city tiles
+    - Any player controls >= 75% of all units
+    
+    This prevents unnecessarily long games when the outcome is clear.
+    
+    Args:
+        game_state: Current game state containing player information
+        
+    Returns:
+        True if early stopping conditions are met, False otherwise
+    """
     ct_count = count_city_tiles(game_state)
     unit_count = count_units(game_state)
     ct_pct = ct_count / max(ct_count.sum(), 1)
@@ -41,17 +104,54 @@ def should_early_stop(game_state: Game) -> bool:
 
 
 class RewardSpec(NamedTuple):
-    reward_min: float
-    reward_max: float
-    zero_sum: bool
-    only_once: bool
+    """
+    Specification for a reward space defining its key characteristics.
+    
+    Attributes:
+        reward_min: Minimum possible reward value
+        reward_max: Maximum possible reward value
+        zero_sum: Whether rewards sum to zero across players
+        only_once: Whether reward is given once (True) or can repeat (False)
+    
+    This specification helps ensure reward spaces are properly bounded and
+    behave consistently with respect to the learning algorithm's expectations.
+    """
+    reward_min: float  # Minimum possible reward value
+    reward_max: float  # Maximum possible reward value
+    zero_sum: bool    # Whether rewards sum to zero across players
+    only_once: bool   # Whether reward is given once or can repeat
 
 
 # All reward spaces defined below
 
 class BaseRewardSpace(ABC):
     """
-    A class used for defining a reward space and/or done state for either the full game or a sub-task
+    Abstract base class for defining reward spaces in the Lux environment.
+    
+    This class provides the interface for:
+    1. Reward Calculation:
+       - Computing rewards for each player
+       - Determining episode termination
+       - Handling both full game and subtask rewards
+       
+    2. Reward Specification:
+       - Defining reward bounds
+       - Specifying zero-sum properties
+       - Indicating one-time vs repeating rewards
+       
+    3. State Information:
+       - Accessing game state
+       - Tracking progress
+       - Providing debugging info
+       
+    All reward spaces must implement:
+    - get_reward_spec(): Define reward properties
+    - compute_rewards_and_done(): Calculate rewards and termination
+    
+    This abstraction allows for:
+    - Consistent reward space interface
+    - Flexible reward definitions
+    - Clear separation of concerns
     """
     def __init__(self, **kwargs):
         if kwargs:
@@ -74,7 +174,29 @@ class BaseRewardSpace(ABC):
 
 class FullGameRewardSpace(BaseRewardSpace):
     """
-    A class used for defining a reward space for the full game.
+    Base class for reward spaces that span the entire game duration.
+    
+    This class provides a framework for:
+    1. Game-Level Rewards:
+       - Victory/defeat conditions
+       - Resource accumulation
+       - Territory control
+       - Research progress
+       
+    2. Continuous Feedback:
+       - Per-step rewards
+       - Progress indicators
+       - Strategic incentives
+       
+    3. Terminal Rewards:
+       - Final game outcome
+       - Achievement bonuses
+       - Performance metrics
+       
+    The distinction between FullGameRewardSpace and Subtask is that
+    full game rewards provide continuous feedback throughout the entire
+    game, while subtasks focus on specific objectives that can be
+    completed before the game ends.
     """
     def compute_rewards_and_done(self, game_state: Game, done: bool) -> Tuple[Tuple[float, float], bool]:
         return self.compute_rewards(game_state, done), done
@@ -85,6 +207,29 @@ class FullGameRewardSpace(BaseRewardSpace):
 
 
 class GameResultReward(FullGameRewardSpace):
+    """
+    Reward space that focuses on the final game outcome.
+    
+    This reward space:
+    1. Terminal Rewards:
+       - +1 for winner, -1 for loser
+       - 0 reward during gameplay
+       - Uses city tiles as primary victory metric
+       - Uses unit count as tiebreaker
+       
+    2. Early Stopping:
+       - Optional early game termination
+       - Triggers on clear victory conditions
+       - Prevents unnecessarily long games
+       
+    3. Implementation Details:
+       - Normalizes rewards to [-1, 1] range
+       - Zero-sum between players
+       - Only awarded at game end
+       
+    This reward space encourages agents to focus on
+    winning the game rather than intermediate objectives.
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         return RewardSpec(
@@ -122,6 +267,28 @@ class GameResultReward(FullGameRewardSpace):
 
 
 class CityTileReward(FullGameRewardSpace):
+    """
+    Reward space based on city tile control.
+    
+    This reward space provides:
+    1. Continuous Feedback:
+       - Rewards proportional to city tile count
+       - Updated every step
+       - Normalized to [0, 1] range
+       
+    2. Strategic Incentives:
+       - Encourages city expansion
+       - Values territory control
+       - Promotes resource gathering for city building
+       
+    3. Implementation Details:
+       - Non-zero sum between players
+       - Scales with board size (max 1024 tiles)
+       - Independent of other game metrics
+       
+    This reward helps agents learn the importance of
+    city growth and resource management.
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         return RewardSpec(
@@ -136,6 +303,36 @@ class CityTileReward(FullGameRewardSpace):
 
 
 class StatefulMultiReward(FullGameRewardSpace):
+    """
+    Complex reward space combining multiple objectives with state tracking.
+    
+    This reward space provides:
+    1. Multi-Objective Rewards:
+       - Game result (win/loss)
+       - City tile count changes
+       - Unit count changes
+       - Research progress
+       - Fuel management
+       - Worker efficiency
+       
+    2. State Tracking:
+       - Maintains previous counts
+       - Computes deltas each step
+       - Handles night/day transitions
+       
+    3. Customization:
+       - Configurable objective weights
+       - Separate positive/negative scaling
+       - Optional early stopping
+       
+    4. Implementation Details:
+       - Non-zero sum by default
+       - Normalized to small per-step values
+       - Balanced for stable learning
+       
+    This reward space provides rich feedback for learning
+    complex strategies while maintaining stable training.
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         return RewardSpec(
@@ -247,6 +444,30 @@ class StatefulMultiReward(FullGameRewardSpace):
 
 
 class ZeroSumStatefulMultiReward(StatefulMultiReward):
+    """
+    Zero-sum variant of StatefulMultiReward for competitive training.
+    
+    This reward space:
+    1. Competitive Focus:
+       - Ensures rewards sum to zero between players
+       - Encourages direct competition
+       - Prevents reward exploitation
+       
+    2. Implementation:
+       - Inherits StatefulMultiReward tracking
+       - Centers rewards around mean
+       - Maintains relative performance differences
+       
+    3. Training Benefits:
+       - Stable competitive learning
+       - Clear relative progress signals
+       - Natural curriculum through opponent improvement
+       
+    This variant is particularly useful for:
+    - Self-play training
+    - Tournament-style evaluation
+    - Learning robust competitive strategies
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         return RewardSpec(
@@ -262,6 +483,36 @@ class ZeroSumStatefulMultiReward(StatefulMultiReward):
 
 
 class PunishingExponentialReward(BaseRewardSpace):
+    """
+    Reward space with strong penalties for losing units/cities.
+    
+    This reward space provides:
+    1. Survival Emphasis:
+       - Heavy penalties for losses (-0.1)
+       - Encourages conservative play
+       - Terminates on unit/city loss
+       
+    2. Resource Management:
+       - Tracks city counts
+       - Monitors unit populations
+       - Values fuel and research
+       
+    3. Implementation Details:
+       - Non-zero sum
+       - Exponential scaling of rewards
+       - Early termination on losses
+       - State tracking for deltas
+       
+    4. Learning Objectives:
+       - Avoid catastrophic losses
+       - Maintain resource efficiency
+       - Balance risk and reward
+       
+    This space helps train agents to:
+    - Play more carefully
+    - Avoid risky strategies
+    - Maintain core assets
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         return RewardSpec(
@@ -350,8 +601,36 @@ class PunishingExponentialReward(BaseRewardSpace):
 # NB: Subtasks that are "different enough" should be defined separately since each subtask gets its own embedding
 # See obs_spaces.SUBTASK_ENCODING
 
-# TODO: Somehow include target locations for subtasks?
 class Subtask(BaseRewardSpace, ABC):
+    """
+    Abstract base class for specific game objectives/subtasks.
+    
+    Subtasks provide:
+    1. Focused Learning:
+       - Single clear objective
+       - Binary completion status
+       - One-time reward on completion
+       
+    2. Task Structure:
+       - Independent of full game outcome
+       - Can complete before game end
+       - Specific success criteria
+       
+    3. Implementation Framework:
+       - Consistent reward bounds [0,1]
+       - Non-zero sum by default
+       - Unique task embeddings
+       
+    4. Common Subtask Types:
+       - Resource collection (wood, coal, uranium)
+       - City building (tiles, contiguous)
+       - Survival challenges
+       - Research milestones
+       
+    Subtasks help break down complex game strategies
+    into learnable components and provide curriculum
+    learning opportunities.
+    """
     @staticmethod
     def get_reward_spec() -> RewardSpec:
         """
@@ -377,6 +656,25 @@ class Subtask(BaseRewardSpace, ABC):
 
 
 class CollectNWood(Subtask):
+    """
+    Subtask for collecting a target amount of wood.
+    
+    Features:
+    1. Resource Focus:
+       - Wood collection objective
+       - Default target = worker capacity
+       - Basic resource gathering practice
+       
+    2. Learning Goals:
+       - Worker control
+       - Resource identification
+       - Inventory management
+       
+    3. Implementation:
+       - Tracks total wood across all units
+       - Completes when target reached
+       - Independent of other resources
+    """
     def __init__(self, n: int = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_CAPACITY"]["WORKER"], **kwargs):
         super(CollectNWood, self).__init__(**kwargs)
         self.n = n
@@ -389,6 +687,25 @@ class CollectNWood(Subtask):
 
 
 class CollectNCoal(Subtask):
+    """
+    Subtask for collecting a target amount of coal.
+    
+    Features:
+    1. Advanced Resource:
+       - Coal collection objective
+       - Requires research progress
+       - Higher value than wood
+       
+    2. Learning Goals:
+       - Research progression
+       - Resource prioritization
+       - Worker specialization
+       
+    3. Implementation:
+       - Default target = half worker capacity
+       - Tracks total coal across units
+       - Requires coal mining research
+    """
     def __init__(self, n: int = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_CAPACITY"]["WORKER"] // 2, **kwargs):
         super(CollectNCoal, self).__init__(**kwargs)
         self.n = n
@@ -401,6 +718,25 @@ class CollectNCoal(Subtask):
 
 
 class CollectNUranium(Subtask):
+    """
+    Subtask for collecting a target amount of uranium.
+    
+    Features:
+    1. End-game Resource:
+       - Uranium collection objective
+       - Requires maximum research
+       - Highest value resource
+       
+    2. Learning Goals:
+       - Late-game strategies
+       - Research completion
+       - High-value resource management
+       
+    3. Implementation:
+       - Default target = 1/5 worker capacity
+       - Tracks total uranium across units
+       - Requires uranium mining research
+    """
     def __init__(self, n: int = GAME_CONSTANTS["PARAMETERS"]["RESOURCE_CAPACITY"]["WORKER"] // 5, **kwargs):
         super(CollectNUranium, self).__init__(**kwargs)
         self.n = n
@@ -413,6 +749,25 @@ class CollectNUranium(Subtask):
 
 
 class MakeNCityTiles(Subtask):
+    """
+    Subtask for expanding city size through new tiles.
+    
+    Features:
+    1. City Growth:
+       - Build multiple city tiles
+       - Any configuration allowed
+       - Minimum target > 1 (start city)
+       
+    2. Learning Goals:
+       - Resource to city conversion
+       - Territory expansion
+       - Worker build actions
+       
+    3. Implementation:
+       - Counts total city tiles
+       - Location independent
+       - Supports early expansion
+    """
     def __init__(self, n_city_tiles: int = 2, **kwargs):
         super(MakeNCityTiles, self).__init__(**kwargs)
         assert n_city_tiles > 1, "Players start with 1 city tile already"
@@ -423,6 +778,25 @@ class MakeNCityTiles(Subtask):
 
 
 class MakeNContiguousCityTiles(MakeNCityTiles):
+    """
+    Subtask requiring connected city tile placement.
+    
+    Features:
+    1. Strategic Growth:
+       - Build adjacent city tiles
+       - Form single large city
+       - Efficient resource sharing
+       
+    2. Learning Goals:
+       - Spatial planning
+       - Defensive positioning
+       - Resource optimization
+       
+    3. Implementation:
+       - Tracks largest contiguous city
+       - Inherits from MakeNCityTiles
+       - Requires strategic placement
+    """
     def completed_task(self, game_state: Game) -> np.ndarray:
         return np.array([
             # Extra -1 is included to avoid taking max of empty sequence
@@ -432,6 +806,25 @@ class MakeNContiguousCityTiles(MakeNCityTiles):
 
 
 class CollectNTotalFuel(Subtask):
+    """
+    Subtask for accumulating total fuel across all cities.
+    
+    Features:
+    1. Night Survival:
+       - Fuel stockpiling goal
+       - Default = one night's upkeep
+       - Critical for city maintenance
+       
+    2. Learning Goals:
+       - Resource conversion
+       - Night cycle preparation
+       - City sustainability
+       
+    3. Implementation:
+       - Tracks total fuel in cities
+       - Scales with city count
+       - Based on upkeep constants
+    """
     def __init__(self, n_total_fuel: int = GAME_CONSTANTS["PARAMETERS"]["LIGHT_UPKEEP"]["CITY"] *
                                            GAME_CONSTANTS["PARAMETERS"]["NIGHT_LENGTH"], **kwargs):
         super(CollectNTotalFuel, self).__init__(**kwargs)
@@ -442,6 +835,32 @@ class CollectNTotalFuel(Subtask):
 
 
 class SurviveNNights(Subtask):
+    """
+    Subtask for surviving multiple night cycles.
+    
+    Features:
+    1. Survival Challenge:
+       - Maintain cities through nights
+       - No unit/city tile losses
+       - Resource management focus
+       
+    2. Learning Goals:
+       - Night cycle preparation
+       - Resource stockpiling
+       - City/unit preservation
+       - Long-term planning
+       
+    3. Implementation:
+       - Tracks game cycles
+       - Monitors unit/city counts
+       - Partial rewards for progress
+       - Fails on any losses
+       
+    4. Reward Structure:
+       - 1.0 for full completion
+       - 0.5 for surviving but incomplete
+       - 0.0 for any losses
+    """
     def __init__(self, n_nights: int = 1, **kwargs):
         super(SurviveNNights, self).__init__(**kwargs)
         cycle_len = GAME_CONSTANTS["PARAMETERS"]["DAY_LENGTH"] + GAME_CONSTANTS["PARAMETERS"]["NIGHT_LENGTH"]
@@ -490,6 +909,32 @@ class SurviveNNights(Subtask):
 
 
 class GetNResearchPoints(Subtask):
+    """
+    Subtask for achieving research milestones.
+    
+    Features:
+    1. Technology Progress:
+       - Research point accumulation
+       - Default = coal requirement
+       - Unlocks resource access
+       
+    2. Learning Goals:
+       - City tile utilization
+       - Research prioritization
+       - Strategic progression
+       - Resource tier planning
+       
+    3. Implementation:
+       - Tracks research points
+       - Configurable target
+       - Based on game constants
+       - Enables resource tiers
+       
+    4. Strategic Impact:
+       - Coal mining (50 points)
+       - Uranium mining (200 points)
+       - Advanced resource access
+    """
     def __init__(
             self,
             n_research_points: int = GAME_CONSTANTS["PARAMETERS"]["RESEARCH_REQUIREMENTS"]["COAL"],

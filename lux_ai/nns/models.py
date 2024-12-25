@@ -13,6 +13,30 @@ from ..lux_gym.reward_spaces import RewardSpec
 
 
 class DictActor(nn.Module):
+    """
+    Actor network that handles multiple discrete action spaces in a dictionary format.
+    
+    This module processes game state features to generate action probabilities for
+    different action types (movement, resource gathering, city actions, etc.).
+    
+    Key Features:
+    1. Multi-Space Handling:
+       - Processes multiple action spaces in parallel
+       - Each space has its own convolutional head
+       
+    2. Action Masking:
+       - Supports masking invalid actions
+       - Handles overlapping actions per location
+       
+    3. Sampling/Selection:
+       - Can either sample actions or select best ones
+       - Supports multiple actions per location
+       
+    Implementation Notes:
+    - Expects MultiDiscrete action spaces
+    - Uses 1x1 convolutions for action prediction
+    - Handles batched inputs for multiple environments
+    """
     def __init__(
             self,
             in_channels: int,
@@ -110,6 +134,20 @@ class DictActor(nn.Module):
 
 
 class MultiLinear(nn.Module):
+    """
+    Multi-headed linear layer for parallel value prediction across different subtasks.
+    
+    This module maintains separate weights for each value head, allowing different
+    subtasks to have specialized value predictions while sharing the same base
+    network features.
+    
+    Features:
+    - Maintains N separate linear transformations
+    - Supports batch processing with head selection
+    - Uses Kaiming initialization for stable training
+    
+    Note: Future enhancement planned for float weightings instead of integer indices
+    """
     # TODO: Add support for subtask float weightings instead of integer indices
     def __init__(self, num_layers: int, in_features: int, out_features: int, bias: bool = True):
         super(MultiLinear, self).__init__()
@@ -138,6 +176,26 @@ class MultiLinear(nn.Module):
 
 
 class BaselineLayer(nn.Module):
+    """
+    Value prediction layer that estimates expected returns for the current state.
+    
+    This module processes game state features to predict expected rewards,
+    supporting both single-task and multi-task scenarios through value heads.
+    
+    Features:
+    1. Reward Space Handling:
+       - Supports zero-sum and independent rewards
+       - Scales predictions to match reward bounds
+       - Handles recurring vs one-time rewards
+       
+    2. Multi-Head Support:
+       - Optional multiple value heads for different subtasks
+       - Shared feature processing with specialized predictions
+       
+    3. Input Processing:
+       - Optional input rescaling for better gradient flow
+       - Spatial feature aggregation
+    """
     def __init__(self, in_channels: int, reward_space: RewardSpec, n_value_heads: int, rescale_input: bool):
         super(BaselineLayer, self).__init__()
         assert n_value_heads >= 1
@@ -181,6 +239,29 @@ class BaselineLayer(nn.Module):
 
 
 class BasicActorCriticNetwork(nn.Module):
+    """
+    Complete actor-critic architecture for the Lux AI agent.
+    
+    This network combines:
+    1. Feature Extraction:
+       - Processes dictionary observations
+       - Uses a base model for spatial feature extraction
+       
+    2. Actor Network:
+       - Policy prediction across multiple action spaces
+       - Action masking and sampling
+       - Spectral normalization for stable training
+       
+    3. Critic Network:
+       - Value prediction for current state
+       - Optional multi-headed value estimation
+       - Reward space aware scaling
+       
+    Architecture Notes:
+    - Uses spectral normalization in both actor and critic
+    - Separates policy and value computation paths
+    - Supports both sampling and deterministic action selection
+    """
     def __init__(
             self,
             base_model: nn.Module,
@@ -243,6 +324,24 @@ class BasicActorCriticNetwork(nn.Module):
             sample: bool = True,
             **actor_kwargs
     ) -> Dict[str, Any]:
+        """
+        Process a game state to generate actions and value estimates.
+        
+        Args:
+            x: Dictionary containing observations and masks
+            sample: If True, sample actions; if False, select best
+            **actor_kwargs: Additional arguments for action selection
+            
+        Returns:
+            Dictionary containing:
+            - actions: Selected actions for each space
+            - policy_logits: Action probabilities
+            - baseline: Value predictions
+            
+        Note:
+            Handles both training (sampling) and evaluation (best action)
+            modes through the sample parameter.
+        """
         x, input_mask, available_actions_mask, subtask_embeddings = self.dict_input_layer(x)
         base_out, input_mask = self.base_model((x, input_mask))
         if subtask_embeddings is not None:
@@ -261,18 +360,46 @@ class BasicActorCriticNetwork(nn.Module):
         )
 
     def sample_actions(self, *args, **kwargs):
+        """
+        Convenience method for sampling actions during training.
+        Equivalent to forward() with sample=True.
+        """
         return self.forward(*args, sample=True, **kwargs)
 
     def select_best_actions(self, *args, **kwargs):
+        """
+        Convenience method for selecting best actions during evaluation.
+        Equivalent to forward() with sample=False.
+        """
         return self.forward(*args, sample=False, **kwargs)
 
     @staticmethod
     def make_spectral_norm_head_base(n_layers: int, n_channels: int, activation: Callable) -> nn.Module:
         """
-        Returns the base of an action or value head, with the final layer of the base/the semifinal layer of the
-        head spectral normalized.
-        NB: this function actually returns a base with n_layer - 1 layers, leaving the final layer to be filled in
-        with the proper action or value output layer.
+        Create a network base with spectral normalization for stable training.
+        
+        This method constructs a sequence of convolutional layers with spectral
+        normalization applied to the final layer, which helps stabilize training
+        by constraining the Lipschitz constant of the network.
+        
+        Architecture:
+        1. (n_layers - 2) standard 1x1 conv layers with activation
+        2. 1 spectrally normalized 1x1 conv layer with activation
+        
+        Args:
+            n_layers: Total number of layers (including final output layer)
+            n_channels: Number of channels in each conv layer
+            activation: Activation function to use between layers
+            
+        Returns:
+            nn.Module: Sequential network with spectral normalization
+            
+        Notes:
+            - Returns (n_layers - 1) layers, leaving final output layer
+              to be added by the actor/critic heads
+            - Spectral norm on penultimate layer helps stabilize
+              training without constraining the output space
+            - Requires n_layers >= 2 for proper normalization
         """
         assert n_layers >= 2
         layers = []
