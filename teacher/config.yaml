@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: conv_phase_3_2_block_teacher
+name: conv_phase_2_tiny_teacher
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -38,7 +38,7 @@ discounting: 0.999
 
 ## MODEL params
 model_arch: conv_model
-n_blocks: 4
+n_blocks: 2
 hidden_dim: 128
 embedding_dim: 32
 n_merge_layers: 1
@@ -75,12 +75,3 @@ disable_wandb: False
 model_log_freq: 100
 # file_descriptor or file_system
 sharing_strategy: file_descriptor
-
-# Pretrained model for KL loss
-use_teacher: True
-teacher_load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/teacher # E.g. .../outputs/09-01/09-58-50/
-teacher_checkpoint_file: 03180480.pt # E.g. 05079552.pt
-
-#load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
-#checkpoint_file: 17831232.pt
-#weights_only: False
