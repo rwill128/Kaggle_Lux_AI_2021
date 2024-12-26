@@ -171,9 +171,9 @@ class StatefulMultiReward(FullGameRewardSpace):
             "fuel": 0.005,
             # Penalize workers each step that their cargo remains full
             # "full_workers": -0.01,
-            "full_workers": 0.,
+            "full_workers": -.000,
             # A reward given each step
-            "step": 0.,
+            "step": 0.00,
         }
         self.weights.update({key: val for key, val in kwargs.items() if key in self.weights.keys()})
         for key in copy.copy(kwargs).keys():

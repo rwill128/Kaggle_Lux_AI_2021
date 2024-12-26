@@ -23,6 +23,7 @@ from functools import lru_cache
 import gym
 import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple, Union
+import logging
 
 # Constants imported from local modules; these constants include things like
 # - MAX_CAPACITY: Maximum cargo capacity for units
@@ -294,17 +295,13 @@ class BasicActionSpace(BaseActSpace):
         # p = number of players (commonly 2 in this environment).
         p = 2
 
-        return gym.spaces.Dict({
-            "worker": gym.spaces.MultiDiscrete(
-                np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["worker"])
-            ),
-            "cart": gym.spaces.MultiDiscrete(
-                np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["cart"])
-            ),
-            "city_tile": gym.spaces.MultiDiscrete(
-                np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["city_tile"])
-            ),
-        })
+        spaces_dict = gym.spaces.Dict(
+            {"worker": gym.spaces.MultiDiscrete(np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["worker"])),
+             "cart": gym.spaces.MultiDiscrete(np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["cart"])),
+             "city_tile": gym.spaces.MultiDiscrete(
+                 np.zeros((1, p, x, y), dtype=int) + len(ACTION_MEANINGS["city_tile"])), })
+
+        return spaces_dict
 
     @lru_cache(maxsize=None)
     def get_action_space_expanded_shape(self, *args, **kwargs) -> Dict[str, Tuple[int, ...]]:
@@ -574,6 +571,7 @@ class BasicActionSpace(BaseActSpace):
                             y,
                             ACTION_MEANINGS_TO_IDX["city_tile"]["BUILD_CART"]
                             ] = False
+
 
         return available_actions_mask
 

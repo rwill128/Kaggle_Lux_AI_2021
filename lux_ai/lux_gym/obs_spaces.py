@@ -1,5 +1,7 @@
 import functools
+import json
 import logging
+# import pickle
 from abc import ABC, abstractmethod
 import gym
 import itertools
@@ -412,6 +414,16 @@ class _FixedShapeContinuousObsWrapperV2(gym.Wrapper):
         )
         obs["turn"][0, 0] = observation.turn / GAME_CONSTANTS["PARAMETERS"]["MAX_DAYS"]
         obs["board_size"][0, 0] = MAP_SIZES.index((observation.map_width, observation.map_height))
+
+        # def save_board(board_dict, filename="board.pkl"):
+        #     """
+        #     Saves the observation dictionary (with NumPy arrays) to disk using pickle.
+        #     """
+        #     with open(filename, "wb") as f:
+        #         pickle.dump(board_dict, f)
+        #     print(f"Saved board dict to {filename}.")
+
+        # save_board(obs, filename="board-" + str(observation.turn) + ".pkl")
 
         return obs
 

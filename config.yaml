@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: conv_phase2_result_reward
+name: conv_phase_1_small_penalty_full
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -38,7 +38,7 @@ discounting: 0.999
 
 ## MODEL params
 model_arch: conv_model
-n_blocks: 8
+n_blocks: 1
 hidden_dim: 128
 embedding_dim: 32
 n_merge_layers: 1
@@ -77,6 +77,6 @@ model_log_freq: 100
 sharing_strategy: file_descriptor
 
 
-load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
-checkpoint_file: 17831232.pt
-weights_only: False
+#load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
+#checkpoint_file: 17831232.pt
+#weights_only: False
