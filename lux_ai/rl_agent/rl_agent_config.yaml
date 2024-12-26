@@ -1,5 +1,5 @@
-device: player_id
-#device: cpu
+#device: player_id
+device: cpu
 
 # Use manual preference based collision detection
 use_collision_detection: True

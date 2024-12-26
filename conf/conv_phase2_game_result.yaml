@@ -64,7 +64,7 @@ lmb: 0.8
 reduction: sum
 
 # MISCELLANEOUS params
-actor_device: cuda:1
+actor_device: cuda:0
 learner_device: cuda:0
 disable_wandb: False
 model_log_freq: 100

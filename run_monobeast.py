@@ -62,7 +62,7 @@ def get_default_flags(flags: DictConfig) -> DictConfig:
     return OmegaConf.create(flags)
 
 
-@hydra.main(config_path="conf", config_name="conv_phase1_shaped_reward")
+@hydra.main(config_path="/home/rick/IdeaProjects/Kaggle_Lux_AI_2021", config_name="config.yaml")
 def main(flags: DictConfig):
     cli_conf = OmegaConf.from_cli()
     if Path("config.yaml").exists():
