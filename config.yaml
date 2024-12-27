@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: conv_phase_3_2_block_teacher
+name: conv_phase_5_8_block_teacher
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -38,7 +38,7 @@ discounting: 0.999
 
 ## MODEL params
 model_arch: conv_model
-n_blocks: 4
+n_blocks: 16
 hidden_dim: 128
 embedding_dim: 32
 n_merge_layers: 1
@@ -54,16 +54,16 @@ kernel_size: 5
 ## OPTIMIZER params
 optimizer_class: Adam
 optimizer_kwargs:
-  lr: 1e-4
+  lr: 5e-5
   # See https://arxiv.org/pdf/2105.05246.pdf
   eps: 0.0003
   #alpha: 0.9
 min_lr_mod: 0.01
 
 ## LOSS params
-entropy_cost: 0.001
+entropy_cost: 0.0002
 baseline_cost: 1.
-teacher_kl_cost: 0.005
+teacher_kl_cost: 0.01
 # lambda parameter for TD-lambda and UPGO losses
 lmb: 0.8
 reduction: sum
@@ -79,7 +79,7 @@ sharing_strategy: file_descriptor
 # Pretrained model for KL loss
 use_teacher: True
 teacher_load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/teacher # E.g. .../outputs/09-01/09-58-50/
-teacher_checkpoint_file: 03180480.pt # E.g. 05079552.pt
+teacher_checkpoint_file: 03764544.pt # E.g. 05079552.pt
 
 #load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
 #checkpoint_file: 17831232.pt

@@ -166,6 +166,7 @@ class StatefulMultiReward(FullGameRewardSpace):
         self.weights = {
             "game_result": 10.,
             "city": 1.,
+            "final_cities": 1.,
             "unit": 0.5,
             "research": 0.1,
             "fuel": 0.005,
@@ -209,14 +210,17 @@ class StatefulMultiReward(FullGameRewardSpace):
         if done:
             game_result_reward = [int(GameResultReward.compute_player_reward(p)) for p in game_state.players]
             game_result_reward = (rankdata(game_result_reward) - 1.) * 2. - 1.
+            final_city_count = new_city_count
             self._reset()
         else:
             game_result_reward = np.array([0., 0.])
+            final_city_count = np.array([0., 0.])
             self.city_count = new_city_count
             self.unit_count = new_unit_count
             self.research_points = new_research_points
             self.total_fuel = new_total_fuel
         reward_items_dict["game_result"] = game_result_reward
+        reward_items_dict["final_cities"] = final_city_count
 
         assert self.weights.keys() == reward_items_dict.keys()
         reward = np.stack(
