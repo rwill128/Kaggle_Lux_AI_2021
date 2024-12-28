@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: conv_phase_5_8_block_teacher
+name: conv_phase_12_layers_no_teacher_1000_batch
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -31,9 +31,9 @@ reward_space_kwargs:
 ## TRAINING params
 total_steps: 2e7
 num_actors: 2
-n_actor_envs: 16
+n_actor_envs: 12
 unroll_length: 16
-batch_size: 4
+batch_size: 6
 discounting: 0.999
 
 ## MODEL params
@@ -54,7 +54,7 @@ kernel_size: 5
 ## OPTIMIZER params
 optimizer_class: Adam
 optimizer_kwargs:
-  lr: 5e-5
+  lr: 1e-6
   # See https://arxiv.org/pdf/2105.05246.pdf
   eps: 0.0003
   #alpha: 0.9
@@ -82,5 +82,5 @@ sharing_strategy: file_descriptor
 #teacher_checkpoint_file: 03764544.pt # E.g. 05079552.pt
 
 load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
-checkpoint_file: 02225792_weights.pt
+checkpoint_file: 00434368_weights.pt
 weights_only: True
