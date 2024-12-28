@@ -1141,6 +1141,10 @@ def train(flags):
         Saves a checkpoint: model weights, optimizer state, scheduler state, current training progress, etc.
         """
         logging.info(f"Saving checkpoint to {checkpoint_path}")
+
+        cp_path_pt = checkpoint_path + ".pt"
+        cp_path_weights = checkpoint_path + "_weights.pt"
+
         torch.save(
             {
                 "model_state_dict": actor_model.state_dict(),
@@ -1149,14 +1153,21 @@ def train(flags):
                 "step": step,
                 "total_games_played": total_games_played,
             },
-            checkpoint_path + ".pt",
+            cp_path_pt,
             )
         torch.save(
             {
                 "model_state_dict": actor_model.state_dict(),
             },
-            checkpoint_path + "_weights.pt"
+            cp_path_weights
         )
+
+        # If wandb logging is enabled, log an artifact containing these checkpoints
+        if not flags.disable_wandb:
+            artifact = wandb.Artifact(name=f"model-{step}", type="model")
+            artifact.add_file(cp_path_pt)
+            artifact.add_file(cp_path_weights)
+            wandb.log_artifact(artifact)
 
     timer = timeit.default_timer
     try:
