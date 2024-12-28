@@ -32,18 +32,43 @@ def in_bounds(pos: Position, board_dims: Tuple[int, int]) -> bool:
 
 
 def DEBUG_MESSAGE(msg: Any) -> NoReturn:
+    """Print a debug message to stderr.
+
+    Args:
+        msg: Message to print (converted to string)
+    """
     print(str(msg), file=sys.stderr)
 
 
 def RUNTIME_DEBUG_MESSAGE(msg: Any) -> NoReturn:
+    """Print a debug message only during competition evaluation.
+
+    Used for logging that should only appear in competition logs but not
+    during local testing.
+
+    Args:
+        msg: Message to print (converted to string)
+    """
     if not LOCAL_EVAL:
         DEBUG_MESSAGE(str(msg))
 
 
 def RUNTIME_ASSERT(statement: bool, msg: Any = "") -> NoReturn:
-    """
-    Asserts a statement, but only raises an error during local evaluation.
-    During competition evaluation, instead prints the error to the agent debug logs
+    """Assert a condition with environment-specific error handling.
+
+    During local evaluation, raises a RuntimeError if the assertion fails.
+    During competition evaluation, prints the error message to debug logs
+    but allows execution to continue.
+
+    This allows for development-time assertions that won't crash the agent
+    during competition matches.
+
+    Args:
+        statement: Condition to assert
+        msg: Optional error message to display on failure
+    
+    Raises:
+        RuntimeError: If statement is False and in local evaluation mode
     """
     if statement:
         return

@@ -6,6 +6,32 @@ from .conv_blocks import ResidualBlock
 
 
 class UNET(nn.Module):
+    """
+    U-Net architecture for processing spatial game state information.
+    
+    This implementation follows the classic U-Net design with:
+    - Downsampling path (encoder) with residual blocks and average pooling
+    - Bottleneck layer with maximum feature channels
+    - Upsampling path (decoder) with transposed convolutions and skip connections
+    
+    Architecture Details:
+    - Three resolution levels with progressive channel doubling
+    - Residual blocks at each resolution for feature extraction
+    - Skip connections between encoder and decoder paths
+    - Input mask propagation for valid position tracking
+    
+    Features:
+    - Maintains spatial information through skip connections
+    - Processes multi-scale features efficiently
+    - Handles variable input sizes through dynamic padding
+    - Preserves valid position information via mask propagation
+    
+    Game-Specific Considerations:
+    - Designed for processing game board states
+    - Maintains spatial relationships between game elements
+    - Supports both local and global feature extraction
+    - Handles masked inputs for valid game positions
+    """
     def __init__(
             self,
             n_blocks_per_reduction: int,
@@ -14,6 +40,42 @@ class UNET(nn.Module):
             width: int,
             **residual_block_kwargs
     ):
+        """
+        Initialize the U-Net architecture.
+        
+        Args:
+            n_blocks_per_reduction: Number of residual blocks at each resolution level
+            in_out_channels: Number of input and output channels
+            height: Height of the input feature maps
+            width: Width of the input feature maps
+            **residual_block_kwargs: Additional arguments passed to ResidualBlock
+            
+        Architecture Layout:
+        1. Encoder Path (Downsampling):
+           - block1_down: n residual blocks at original resolution
+           - reduction1: 2x downsampling
+           - block2_down: n residual blocks at half resolution
+           - reduction2: 2x downsampling
+           
+        2. Bottleneck:
+           - block3: n residual blocks at quarter resolution
+           
+        3. Decoder Path (Upsampling):
+           - expansion2: 2x upsampling
+           - block2_up: n residual blocks with skip connection from block2
+           - expansion1: 2x upsampling
+           - block1_up: n residual blocks with skip connection from block1
+           
+        Channel Progression:
+        - Level 1: in_out_channels
+        - Level 2: 2 * in_out_channels
+        - Level 3: 4 * in_out_channels
+        
+        Note:
+        - Features are processed at multiple scales
+        - Skip connections preserve spatial details
+        - Input masks are propagated through the network
+        """
         super(UNET, self).__init__()
 
         block1_channels = in_out_channels
@@ -109,6 +171,36 @@ class UNET(nn.Module):
         )
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Process input through U-Net architecture.
+        
+        Args:
+            x: Tuple of (features, mask) where:
+               - features: Input tensor of shape (batch, channels, height, width)
+               - mask: Binary mask indicating valid positions
+               
+        Returns:
+            Tuple of (processed_features, mask) where:
+            - processed_features: Output tensor with same shape as input
+            - mask: Original input mask
+            
+        Processing Flow:
+        1. Encoder Path:
+           - Process through block1_down at original resolution
+           - Downsample and process through block2_down
+           - Further downsample and process through block3
+           
+        2. Decoder Path:
+           - Upsample block3 output and concatenate with block2 features
+           - Process through block2_up
+           - Upsample and concatenate with block1 features
+           - Process through block1_up
+           
+        Note:
+        - Skip connections preserve spatial information
+        - Masks are used to focus on valid game positions
+        - Feature maps are concatenated channel-wise
+        """
         x_orig, input_mask_orig = x
 
         x1, input_mask1 = self.block1_down((x_orig, input_mask_orig.float()))

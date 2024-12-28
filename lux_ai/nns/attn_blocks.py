@@ -8,11 +8,45 @@ from .weight_init import trunc_normal_
 
 class RelPosSelfAttention(nn.Module):
     """
-    Relative Position Self Attention
+    Relative Position Self Attention module for spatial feature extraction.
+    
+    This module implements a self-attention mechanism that considers relative
+    spatial positions between elements in the input. It's particularly useful
+    for game board state processing where spatial relationships matter.
+    
+    Architecture:
+    1. Query-Key-Value Attention:
+       - Scaled dot-product attention with relative position encoding
+       - Separate embeddings for width and height dimensions
+       
+    2. Position Encoding:
+       - Learnable relative position embeddings for both dimensions
+       - Handles 2D spatial relationships efficiently
+       
+    Features:
+    - Supports masked attention for valid game positions
+    - Optional head folding for computational efficiency
+    - Maintains spatial awareness through relative positions
+    
+    Reference:
     From: https://gist.github.com/ShoufaChen/ec7b70038a6fdb488da4b34355380569
     """
 
     def __init__(self, h: int, w: int, dim: int, relative=True, fold_heads=False):
+        """
+        Initialize the RelPosSelfAttention module.
+        
+        Args:
+            h: Height of the input feature map
+            w: Width of the input feature map
+            dim: Number of input channels
+            relative: Whether to use relative position encoding
+            fold_heads: Whether to fold attention heads back into channels
+            
+        Note:
+            Creates learnable position embeddings for both dimensions
+            with normal initialization scaled by dimension.
+        """
         super(RelPosSelfAttention, self).__init__()
         self.relative = relative
         self.fold_heads = fold_heads
@@ -29,6 +63,25 @@ class RelPosSelfAttention(nn.Module):
             v: torch.Tensor,
             attn_mask: torch.Tensor
     ) -> torch.Tensor:
+        """
+        Compute relative position self-attention.
+        
+        Args:
+            q: Query tensor of shape (batch, heads, height, width, dim)
+            k: Key tensor of shape (batch, heads, height, width, dim)
+            v: Value tensor of shape (batch, heads, height, width, dim)
+            attn_mask: Binary mask for valid positions
+            
+        Returns:
+            Attention output tensor of shape (batch, height, width, heads*dim)
+            if fold_heads=True, else (batch, heads, height, width, dim)
+            
+        Note:
+            1. Applies scaled dot-product attention
+            2. Adds relative position encodings if enabled
+            3. Handles masked positions in attention weights
+            4. Optionally folds heads back into channel dimension
+        """
         """2D self-attention with rel-pos. Add option to fold heads."""
         bs, heads, h, w, dim = q.shape
         q = q * (dim ** -0.5)  # scaled dot-product
@@ -49,6 +102,20 @@ class RelPosSelfAttention(nn.Module):
         return attn_out
 
     def relative_logits(self, q):
+        """
+        Compute relative position logits for both width and height dimensions.
+        
+        Args:
+            q: Query tensor of shape (batch, heads, height, width, dim)
+            
+        Returns:
+            Combined relative position logits for both dimensions
+            
+        Note:
+            1. Computes relative logits separately for width and height
+            2. Uses learned relative position embeddings
+            3. Combines both dimensions' logits additively
+        """
         # Relative logits in width dimension.
         rel_logits_w = self.relative_logits_1d(
             q,
@@ -64,6 +131,22 @@ class RelPosSelfAttention(nn.Module):
         return rel_logits_h + rel_logits_w
 
     def relative_logits_1d(self, q, rel_k, transpose_mask):
+        """
+        Compute relative position logits for one dimension.
+        
+        Args:
+            q: Query tensor of shape (batch, heads, height, width, dim)
+            rel_k: Relative position embeddings
+            transpose_mask: Permutation for proper dimension ordering
+            
+        Returns:
+            Relative position logits for one dimension
+            
+        Note:
+            1. Projects queries onto relative position embeddings
+            2. Reshapes and reorders dimensions for proper attention
+            3. Converts relative to absolute indexing
+        """
         bs, heads, h, w, dim = q.shape
         rel_logits = torch.einsum('bhxyd,md->bhxym', q, rel_k)
         rel_logits = torch.reshape(rel_logits, [-1, heads * h, w, 2 * w - 1])
@@ -93,7 +176,29 @@ class RelPosSelfAttention(nn.Module):
 
 
 class GroupPointWise(nn.Module):
-    """"""
+    """
+    Group-wise point-wise convolution for multi-head projections.
+    
+    This module implements a grouped linear transformation that projects
+    input features into multiple attention heads while maintaining spatial
+    information.
+    
+    Architecture:
+    1. Feature Projection:
+       - Projects input channels to multiple heads
+       - Maintains spatial dimensions
+       - Optional dimension reduction through proj_factor
+       
+    2. Implementation Details:
+       - Uses einsum for efficient computation
+       - Supports variable head counts
+       - Handles both channel expansion and reduction
+       
+    Note:
+    - Primarily used as a component in attention mechanisms
+    - Preserves spatial structure of input features
+    - Initialization uses small standard deviation for stability
+    """
     def __init__(self, in_channels, heads=4, proj_factor=1, target_dimension=None):
         super(GroupPointWise, self).__init__()
         if target_dimension is not None:
@@ -122,6 +227,29 @@ class GroupPointWise(nn.Module):
 
 class RPSA(nn.Module):
     """
+    Relative Position Self-Attention block combining GroupPointWise and RelPosSelfAttention.
+    
+    This module implements a complete attention block that processes spatial
+    features while considering relative positions between elements.
+    
+    Architecture:
+    1. Projections:
+       - Separate Q, K, V projections using GroupPointWise
+       - Maintains multi-head structure
+       
+    2. Attention:
+       - Uses RelPosSelfAttention for position-aware attention
+       - Supports both relative and absolute position encoding
+       
+    Features:
+    - Input masking for valid game positions
+    - Multi-head attention with grouped projections
+    - Efficient spatial relationship modeling
+    
+    Note:
+    - Designed for processing game board states
+    - Preserves spatial information through relative positions
+    - Combines benefits of grouped projections and relative attention
     """
     def __init__(self, in_channels, heads, height, width, pos_enc_type='relative'):
         super(RPSA, self).__init__()
@@ -198,6 +326,23 @@ class GPSA(nn.Module):
         return x
 
     def get_attention(self, x, input_mask):
+        """
+        Compute gated positional self-attention scores.
+        
+        Args:
+            x: Input tensor of shape (batch, num_patches, channels)
+            input_mask: Binary mask for valid positions
+            
+        Returns:
+            Attention weights combining content-based and
+            position-based attention through learned gating
+            
+        Note:
+            1. Projects input to queries and keys
+            2. Computes both content-based and position-based scores
+            3. Combines scores using learned gating parameter
+            4. Applies masking and normalization
+        """
         B, N, C = x.shape
         qk = self.qk(x).reshape(B, N, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k = qk[0], qk[1]
@@ -216,6 +361,23 @@ class GPSA(nn.Module):
         return attn
 
     def get_attention_map(self, x, input_mask, return_map=False):
+        """
+        Generate attention distance statistics or full attention map.
+        
+        Args:
+            x: Input tensor
+            input_mask: Binary mask for valid positions
+            return_map: Whether to return the full attention map
+            
+        Returns:
+            Average attention distances per head, and optionally
+            the full attention map if return_map=True
+            
+        Note: 
+            1. Computes attention weights
+            2. Calculates average attention distance per head
+            3. Optionally returns full attention visualization
+        """
         attn_map = self.get_attention(x, input_mask).mean(0)  # average over batch
         distances = self.rel_indices.squeeze()[:, :, -1] ** .5
         dist = torch.einsum('nm,hnm->h', (distances, attn_map))
@@ -226,6 +388,19 @@ class GPSA(nn.Module):
             return dist
 
     def local_init(self, locality_strength=1.):
+        """
+        Initialize attention to favor local spatial relationships.
+        
+        Args:
+            locality_strength: Scaling factor for position scores
+            
+        Note:
+            1. Initializes value projection to identity
+            2. Sets position projection weights to encourage
+               attention to nearby spatial locations
+            3. Uses kernel-based initialization pattern
+            4. Scales position scores by locality strength
+        """
         self.v.weight.data.copy_(torch.eye(self.dim))
         locality_distance = 1  # max(1,1/locality_strength**.5)
 
@@ -256,6 +431,35 @@ class GPSA(nn.Module):
 
 
 class ViTBlock(nn.Module):
+    """
+    Vision Transformer block adapted for game state processing.
+    
+    This module implements a transformer block that combines multi-head
+    self-attention with a position-wise feed-forward network, adapted
+    specifically for processing game board states.
+    
+    Architecture:
+    1. Attention Path:
+       - Layer normalization
+       - Multi-head self-attention (MHSA)
+       - Residual connection
+       
+    2. Feed-Forward Path:
+       - Layer normalization
+       - Two 1x1 convolutions with activation
+       - Residual connection
+       
+    Features:
+    - Flexible attention mechanism through mhsa_layer
+    - Optional layer normalization
+    - Maintains spatial dimensions
+    - Supports masked operations
+    
+    Note:
+    - Designed for processing game board features
+    - Combines transformer architecture with spatial awareness
+    - Uses convolutions instead of MLPs for efficiency
+    """
     def __init__(
             self,
             in_channels: int,

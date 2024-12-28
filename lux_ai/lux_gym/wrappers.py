@@ -11,6 +11,24 @@ from ..utility_constants import MAX_BOARD_SIZE
 
 
 class PadFixedShapeEnv(gym.Wrapper):
+    """
+    Environment wrapper that pads observations to a fixed size.
+    
+    This wrapper ensures consistent tensor dimensions by:
+    1. Padding spatial observations to max_board_size
+    2. Maintaining an input mask for valid regions
+    3. Handling variable-sized game boards
+    
+    Key Features:
+    - Enables batch processing with fixed dimensions
+    - Preserves original game logic within valid regions
+    - Handles both 4D and 5D tensors appropriately
+    - Maintains compatibility with neural network inputs
+    
+    Args:
+        env: The environment to wrap
+        max_board_size: Maximum board dimensions to pad to
+    """
     def __init__(self, env: gym.Env, max_board_size: Tuple[int, int] = MAX_BOARD_SIZE):
         super(PadFixedShapeEnv, self).__init__(env)
         self.max_board_size = max_board_size
@@ -19,6 +37,20 @@ class PadFixedShapeEnv(gym.Wrapper):
         self.input_mask[:, :self.orig_board_dims[0], :self.orig_board_dims[1]] = True
 
     def _pad(self, x: Union[Dict, np.ndarray]) -> Union[dict, np.ndarray]:
+        """
+        Pad observations to fixed dimensions.
+        
+        Handles:
+        1. Dictionary observations recursively
+        2. 4D tensors (batch, channels, height, width)
+        3. 5D tensors (batch, time, channels, height, width)
+        
+        Args:
+            x: Observation to pad (dict or numpy array)
+            
+        Returns:
+            Padded observation with dimensions matching max_board_size
+        """
         if isinstance(x, dict):
             return {key: self._pad(val) for key, val in x.items()}
         elif x.ndim == 4 and x.shape[2:4] == self.orig_board_dims:
@@ -69,11 +101,44 @@ class PadFixedShapeEnv(gym.Wrapper):
 
 
 class RewardSpaceWrapper(gym.Wrapper):
+    """
+    Wrapper for custom reward computation using reward spaces.
+    
+    This wrapper:
+    1. Delegates reward computation to a reward space object
+    2. Ensures proper game state synchronization
+    3. Handles episode termination conditions
+    
+    The wrapper maintains consistency between:
+    - Lux game engine state
+    - Reward space computations
+    - Episode termination logic
+    
+    Args:
+        env: LuxEnv instance to wrap
+        reward_space: Custom reward computation object
+    """
     def __init__(self, env: LuxEnv, reward_space: BaseRewardSpace):
         super(RewardSpaceWrapper, self).__init__(env)
         self.reward_space = reward_space
 
     def _get_rewards_and_done(self) -> Tuple[Tuple[float, float], bool]:
+        """
+        Compute rewards and episode completion using reward space.
+        
+        This method:
+        1. Delegates reward computation to reward space
+        2. Ensures consistency with game engine state
+        3. Validates episode termination conditions
+        
+        Returns:
+            Tuple containing:
+            - Tuple[float, float]: Rewards for both players
+            - bool: Whether episode is complete
+            
+        Raises:
+            RuntimeError: If reward space and engine state are inconsistent
+        """
         rewards, done = self.reward_space.compute_rewards_and_done(self.unwrapped.game_state, self.done)
         if self.unwrapped.done and not done:
             raise RuntimeError("Reward space did not return done, but the lux engine is done.")
@@ -90,6 +155,29 @@ class RewardSpaceWrapper(gym.Wrapper):
 
 
 class LoggingEnv(gym.Wrapper):
+    """
+    Environment wrapper for tracking metrics and game statistics.
+    
+    Features:
+    1. Game State Tracking:
+       - Unit counts (workers, carts)
+       - City statistics
+       - Research progress
+       
+    2. Performance Metrics:
+       - Peak values tracking
+       - Cumulative rewards
+       - Action distributions
+       
+    3. Debugging Information:
+       - Per-step statistics
+       - Resource utilization
+       - Strategic indicators
+    
+    Args:
+        env: Environment to wrap
+        reward_space: Reward space for additional metrics
+    """
     def __init__(self, env: gym.Env, reward_space: BaseRewardSpace):
         super(LoggingEnv, self).__init__(env)
         self.reward_space = reward_space
@@ -167,12 +255,43 @@ class LoggingEnv(gym.Wrapper):
 
 
 class VecEnv(gym.Env):
+    """
+    Vectorized environment for parallel execution.
+    
+    This environment:
+    1. Manages multiple environments in parallel
+    2. Provides batch processing capabilities
+    3. Synchronizes environment states
+    
+    Implementation Features:
+    - Efficient dictionary stacking
+    - Automatic vectorization of outputs
+    - Proper environment lifecycle management
+    - Support for forced resets
+    
+    Args:
+        envs: List of environments to run in parallel
+    """
     def __init__(self, envs: List[gym.Env]):
         self.envs = envs
         self.last_outs = [() for _ in range(len(self.envs))]
 
     @staticmethod
     def _stack_dict(x: List[Union[Dict, np.ndarray]]) -> Union[Dict, np.ndarray]:
+        """
+        Recursively stack dictionary or array elements.
+        
+        This method:
+        1. Handles nested dictionary structures
+        2. Stacks numpy arrays along batch dimension
+        3. Preserves dictionary structure
+        
+        Args:
+            x: List of dictionaries or arrays to stack
+            
+        Returns:
+            Stacked dictionary or array with batch dimension
+        """
         if isinstance(x[0], dict):
             return {key: VecEnv._stack_dict([i[key] for i in x]) for key in x[0].keys()}
         else:
@@ -180,6 +299,20 @@ class VecEnv(gym.Env):
 
     @staticmethod
     def _vectorize_env_outs(env_outs: List[Tuple]) -> Tuple:
+        """
+        Convert environment outputs to vectorized format.
+        
+        Process:
+        1. Unpack observation, reward, done, info tuples
+        2. Stack observations and info dictionaries
+        3. Convert rewards and done flags to arrays
+        
+        Args:
+            env_outs: List of (obs, reward, done, info) tuples
+            
+        Returns:
+            Tuple of vectorized (obs, rewards, dones, infos)
+        """
         obs_list, reward_list, done_list, info_list = zip(*env_outs)
         obs_stacked = VecEnv._stack_dict(obs_list)
         reward_stacked = np.array(reward_list)
@@ -238,6 +371,24 @@ class VecEnv(gym.Env):
 
 
 class PytorchEnv(gym.Wrapper):
+    """
+    Environment wrapper for PyTorch tensor conversion.
+    
+    Features:
+    1. Automatic tensor conversion:
+       - Numpy arrays to PyTorch tensors
+       - Proper device placement
+       - Non-blocking transfers
+       
+    2. Deep dictionary support:
+       - Recursive tensor conversion
+       - Maintains dictionary structure
+       - Preserves metadata
+    
+    Args:
+        env: Environment to wrap (single or vectorized)
+        device: PyTorch device for tensor placement
+    """
     def __init__(self, env: Union[gym.Env, VecEnv], device: torch.device = torch.device("cpu")):
         super(PytorchEnv, self).__init__(env)
         self.device = device
@@ -252,6 +403,20 @@ class PytorchEnv(gym.Wrapper):
         return tuple([self._to_tensor(out) for out in super(PytorchEnv, self).step(action)])
 
     def _to_tensor(self, x: Union[Dict, np.ndarray]) -> Dict[str, Union[Dict, torch.Tensor]]:
+        """
+        Convert numpy arrays to PyTorch tensors recursively.
+        
+        Features:
+        1. Handles nested dictionary structures
+        2. Non-blocking device transfers
+        3. Maintains dictionary hierarchy
+        
+        Args:
+            x: Dictionary or array to convert
+            
+        Returns:
+            Converted structure with PyTorch tensors
+        """
         if isinstance(x, dict):
             return {key: self._to_tensor(val) for key, val in x.items()}
         else:
@@ -259,8 +424,41 @@ class PytorchEnv(gym.Wrapper):
 
 
 class DictEnv(gym.Wrapper):
+    """
+    Wrapper that converts environment outputs to dictionary format.
+    
+    This wrapper:
+    1. Standardizes environment interface
+    2. Provides consistent dictionary structure
+    3. Ensures key uniqueness
+    
+    Output Format:
+    {
+        'obs': observation,
+        'reward': reward value,
+        'done': completion flag,
+        'info': additional information
+    }
+    """
     @staticmethod
     def _dict_env_out(env_out: tuple) -> dict:
+        """
+        Convert environment output tuple to standardized dictionary.
+        
+        Validation:
+        1. Ensures no key conflicts
+        2. Maintains consistent structure
+        3. Preserves all information
+        
+        Args:
+            env_out: (obs, reward, done, info) tuple
+            
+        Returns: 
+            Dictionary with standardized keys
+            
+        Raises:
+            AssertionError: If info dict contains reserved keys
+        """
         obs, reward, done, info = env_out
         assert "obs" not in info.keys()
         assert "reward" not in info.keys()
