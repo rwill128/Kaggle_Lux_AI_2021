@@ -3,6 +3,7 @@ import gym
 import itertools
 import json
 import numpy as np
+import logging  # <-- Added for minimal logging
 from kaggle_environments import make
 import math
 from pathlib import Path
@@ -25,6 +26,47 @@ try:
     from kaggle_environments.envs.lux_ai_2021.lux_ai_2021 import dir_path as DIR_PATH
 except Exception:
     DIR_PATH = None
+
+import pickle
+import numpy as np
+
+# Suppose `obs` is your dictionary of arrays (like 'city_tile', etc.)
+
+def save_obs(obs, filename="obs.pkl"):
+    """
+    Save the entire observation dict (with all array values printed) to a pickle file.
+    Also turn off print truncation for debugging prints.
+    """
+    # Turn off the default truncation in printing:
+    np.set_printoptions(threshold=np.inf)
+
+    # (Optional) If you just want to print the entire array in the console right now:
+    # print(obs)
+
+    # Now pickle and store the full data
+    with open(filename, "wb") as f:
+        pickle.dump(obs, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"Saved obs to {filename}")
+
+def load_obs(filename="obs.pkl"):
+    """
+    Load the observation dict back from the pickle file.
+    """
+    with open(filename, "rb") as f:
+        data = pickle.load(f)
+    return data
+
+# Example usage:
+
+# If you already have a variable `obs` that has your arrays:
+# obs = {...}
+
+# Save it:
+# save_obs(obs, "my_observations.pkl")
+
+# Later on, or in a separate script, you can load it:
+# loaded_obs = load_obs("my_observations.pkl")
+# print(loaded_obs["city_tile"])  # or whichever key you'd like to inspect
 
 
 """
@@ -75,6 +117,9 @@ class LuxEnv(gym.Env):
             restart_subproc_after_n_resets: int = 100
     ):
         super(LuxEnv, self).__init__()
+        logging.warning("[LuxEnv __init__] Initializing with run_game_automatically=%s, seed=%s",
+                        run_game_automatically, seed)
+
         self.obs_space = obs_space
         self.action_space = act_space
         self.default_reward_space = GameResultReward()
@@ -108,19 +153,20 @@ class LuxEnv(gym.Env):
     def _restart_dimension_process(self) -> NoReturn:
         """
         Start or restart the Node.js dimension process used for game simulation.
-        
+
         This process handles the actual game logic and state updates. We communicate
         with it via stdin/stdout to send actions and receive observations. The process
         is restarted periodically to prevent memory leaks.
-        
+
         The process is started with:
         1. Pipes for stdin/stdout/stderr communication
         2. A background thread to handle stdout asynchronously
         """
+        logging.warning("[LuxEnv _restart_dimension_process] Restarting dimension process.")
         if self._dimension_process is not None:
             self._dimension_process.kill()
         if self.run_game_automatically:
-            # 1.1: Initialize dimensions in the background
+            logging.warning("[LuxEnv _restart_dimension_process] Launching Node.js process.")
             self._dimension_process = Popen(
                 ["node", str(Path(DIR_PATH) / "dimensions/main.js")],
                 stdin=PIPE,
@@ -131,18 +177,21 @@ class LuxEnv(gym.Env):
             self._t = Thread(target=_enqueue_output, args=(self._dimension_process.stdout, self._q))
             self._t.daemon = True
             self._t.start()
-            # atexit.register(_cleanup_dimensions_factory(self._dimension_process))
 
     def reset(self, observation_updates: Optional[List[str]] = None) -> Tuple[Game, Tuple[float, float], bool, Dict]:
+        logging.warning("[LuxEnv reset] Called with observation_updates=%s", observation_updates)
         self.game_state = Game()
         self.reset_count = (self.reset_count + 1) % self.restart_subproc_after_n_resets
-        # There seems to be a gradual memory leak somewhere, so we restart the dimension process every once in a while
         if self.reset_count == 0:
+            logging.warning("[LuxEnv reset] Reached subproc restart threshold, restarting.")
             self._restart_dimension_process()
+
         if self.run_game_automatically:
             assert observation_updates is None, "Game is being run automatically"
             # 1.2: Initialize a blank state game if new episode is starting
             self.configuration["seed"] += 1
+            logging.warning("[LuxEnv reset] Sending 'start' message with new seed=%d", self.configuration["seed"])
+
             initiate = {
                 "type": "start",
                 "agent_names": [],  # unsure if this is provided?
@@ -158,6 +207,7 @@ class LuxEnv(gym.Env):
             self.game_state._update(agent1res[2:])
         else:
             assert observation_updates is not None, "Game is not being run automatically"
+            logging.warning("[LuxEnv reset] Manually initializing game from observation_updates.")
             self.game_state._initialize(observation_updates)
             self.game_state._update(observation_updates[2:])
 
@@ -176,18 +226,27 @@ class LuxEnv(gym.Env):
         }
         self._update_internal_state()
 
-        return self.get_obs_reward_done_info()
+        game_state, rewards, done, info = self.get_obs_reward_done_info()
+        logging.warning("[LuxEnv reset] => returning (game_state, rewards, done, info) = (%s, %s, %s, %s)",
+                        game_state, rewards, done, info)
+        return game_state, rewards, done, info
 
     def step(self, action: Dict[str, np.ndarray]) -> Tuple[Game, Tuple[float, float], bool, Dict]:
+        logging.warning("[LuxEnv step] Called with action dict keys: %s", list(action.keys()))
         if self.run_game_automatically:
             actions_processed, actions_taken = self.process_actions(action)
+            logging.warning("[LuxEnv step] actions_processed=%s, actions_taken=%s", actions_processed, actions_taken)
             self._step(actions_processed)
             self.info["actions_taken"] = actions_taken
         self._update_internal_state()
 
-        return self.get_obs_reward_done_info()
+        game_state, rewards, done, info = self.get_obs_reward_done_info()
+        logging.warning("[LuxEnv step] => returning (game_state, rewards, done, info) = (%s, %s, %s, %s)",
+                        game_state, rewards, done, info)
+        return game_state, rewards, done, info
 
     def manual_step(self, observation_updates: List[str]) -> NoReturn:
+        logging.warning("[LuxEnv manual_step] Called with updates=%s", observation_updates)
         assert not self.run_game_automatically
         self.game_state._update(observation_updates)
 
@@ -196,20 +255,7 @@ class LuxEnv(gym.Env):
         return self.game_state, rewards, self.done, copy.copy(self.info)
 
     def process_actions(self, action: Dict[str, np.ndarray]) -> Tuple[List[List[str]], Dict[str, np.ndarray]]:
-        """
-        Convert network action outputs into game commands.
-        
-        Processes raw network outputs through the action space to generate valid
-        game commands and track which actions were actually taken.
-        
-        Args:
-            action: Dictionary mapping action types to numpy arrays of action logits
-            
-        Returns:
-            Tuple containing:
-            - List of game command strings for both players
-            - Dictionary tracking which actions were actually taken
-        """
+        logging.warning("[LuxEnv process_actions] Processing action dict keys: %s", list(action.keys()))
         return self.action_space.process_actions(
             action,
             self.game_state,
@@ -218,58 +264,29 @@ class LuxEnv(gym.Env):
         )
 
     def _step(self, action: List[List[str]]) -> NoReturn:
-        """
-        Execute actions in the game environment via the Node.js process.
-        
-        This internal method handles the communication protocol with the dimension
-        process:
-        1. Sends actions as JSON via stdin
-        2. Receives and processes game state updates via stderr
-        3. Checks for game completion
-        4. Handles any error output from the process
-        
-        Args:
-            action: List of action lists for both players (must be length 2)
-        """
-        # Send actions to dimension process
+        logging.warning("[LuxEnv _step] Called with action=%s", action)
         assert len(action) == 2
         state = [{'action': a} for a in action]
         self._dimension_process.stdin.write((json.dumps(state) + "\n").encode())
         self._dimension_process.stdin.flush()
 
-        # Receive and process game state updates
         agent1res = json.loads(self._dimension_process.stderr.readline())
-        # Skip agent2res and match_obs_meta since we only need player 1's view
         _ = self._dimension_process.stderr.readline(), self._dimension_process.stderr.readline()
         self.game_state._update(agent1res)
 
-        # Check if game is complete
         match_status = json.loads(self._dimension_process.stderr.readline())
         self.done = match_status["status"] == "finished"
 
-        # Process any error output from dimension process
         while True:
             try:
                 line = self._q.get_nowait()
             except Empty:
-                # No more error output to process
                 break
             else:
-                # Print error output to stderr
-                print(line.decode(), file=sys.stderr, end='')
+                logging.warning("[LuxEnv _step] Dimension process stderr: %s", line.decode().strip())
 
     def _update_internal_state(self) -> NoReturn:
-        """
-        Update internal state tracking after game state changes.
-        
-        This includes:
-        1. Regenerating position-to-unit mapping
-        2. Regenerating position-to-city mapping
-        3. Updating available action masks based on new game state
-        
-        These updates ensure that action processing and validation use
-        the latest game state information.
-        """
+        logging.warning("[LuxEnv _update_internal_state] Called.")
         self.pos_to_unit_dict = _generate_pos_to_unit_dict(self.game_state)
         self.pos_to_city_tile_dict = _generate_pos_to_city_tile_dict(self.game_state)
         self.info["available_actions_mask"] = self.action_space.get_available_actions_mask(
@@ -280,41 +297,16 @@ class LuxEnv(gym.Env):
         )
 
     def seed(self, seed: Optional[int] = None) -> NoReturn:
-        """
-        Set the random seed for the environment.
-        
-        The seed is decremented by 1 because it will be incremented in reset().
-        If no seed is provided, generates a random seed.
-        
-        Args:
-            seed: Integer seed for reproducibility (optional)
-        """
         if seed is not None:
-            # Seed is incremented on reset()
             self.configuration["seed"] = seed - 1
+            logging.warning("[LuxEnv seed] Setting seed to %d (will be incremented on reset)", seed)
         else:
-            self.configuration["seed"] = math.floor(random.random() * 1e9)
+            auto_seed = math.floor(random.random() * 1e9)
+            self.configuration["seed"] = auto_seed
+            logging.warning("[LuxEnv seed] No seed provided, using random seed=%d", auto_seed)
 
     def get_seed(self) -> int:
-        """
-        Get the current random seed.
-        
-        Returns:
-            Current seed value from configuration
-        """
         return self.configuration["seed"]
 
     def render(self, mode='human'):
-        """
-        Render the environment for visualization.
-        
-        This method is not implemented as the Lux AI competition provides
-        its own visualizer for replays.
-        
-        Args:
-            mode: Rendering mode (unused)
-            
-        Raises:
-            NotImplementedError: Always raises this error
-        """
         raise NotImplementedError('LuxEnv rendering is not implemented. Use the Lux visualizer instead.')

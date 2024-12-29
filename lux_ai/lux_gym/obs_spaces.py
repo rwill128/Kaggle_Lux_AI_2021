@@ -553,7 +553,7 @@ class _FixedShapeContinuousObsWrapperV2(gym.Wrapper):
         #     with open(filename, "wb") as f:
         #         pickle.dump(board_dict, f)
         #     print(f"Saved board dict to {filename}.")
-
+        #
         # save_board(obs, filename="board-" + str(observation.turn) + ".pkl")
 
         return obs

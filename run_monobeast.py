@@ -96,5 +96,8 @@ def main(flags: DictConfig):
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn")
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError as e:
+        print(f"Note: {e}")
     main()

@@ -17,7 +17,7 @@ All actions are enumerated and stored as strings in ACTION_MEANINGS and are mapp
 functions in ACTION_MEANING_TO_FUNC, which calls the relevant environment methods to
 perform the action (e.g., move, transfer, pillage, build_city, etc.).
 """
-
+import pickle
 from abc import ABC, abstractmethod
 from functools import lru_cache
 import gym
@@ -787,6 +787,16 @@ class BasicActionSpace(BaseActSpace):
             Input tensor might track that workers took 5 MOVE_NORTH actions
             Output would include {"worker": {"MOVE_NORTH": 5, ...}}
         """
+        def save_board(board_dict, filename="board.pkl"):
+            """
+            Saves the observation dictionary (with NumPy arrays) to disk using pickle.
+            """
+            with open(filename, "wb") as f:
+                pickle.dump(board_dict, f)
+            print(f"Saved actions taken to {filename}.")
+
+        # save_board(actions_taken, filename="actions.pkl")
+
         out = {}
         for space, actions in actions_taken.items():
             out[space] = {
@@ -820,6 +830,11 @@ def get_unit_action(unit: Unit, action_idx: int, pos_to_unit_dict: Dict[Tuple, O
         Transfer actions require the position dictionary to find target units.
         Other actions only need the unit itself.
     """
+
+    # logging.warning("Unit: " + str(unit))
+    # logging.warning("Action idx: " + str(action_idx))
+    # logging.warning("Pos_to_unit dict: " + str(pos_to_unit_dict))
+
     if unit.is_worker():
         unit_type = "worker"
     elif unit.is_cart():

@@ -1,6 +1,6 @@
 defaults:
-- override hydra/job_logging: default
-- override hydra/hydra_logging: default
+  - override hydra/job_logging: default
+  - override hydra/hydra_logging: default
 
 hydra:
   run:
@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: conv_phase_12_layers_no_teacher_1000_batch
+name: testing_logging_changes
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -31,14 +31,14 @@ reward_space_kwargs:
 ## TRAINING params
 total_steps: 2e7
 num_actors: 2
-n_actor_envs: 12
+n_actor_envs: 20
 unroll_length: 16
-batch_size: 6
+batch_size: 40
 discounting: 0.999
 
 ## MODEL params
 model_arch: conv_model
-n_blocks: 16
+n_blocks: 24
 hidden_dim: 128
 embedding_dim: 32
 n_merge_layers: 1
@@ -50,6 +50,7 @@ rescale_se_input: True
 # Conv-specific params
 kernel_size: 5
 
+use_mixed_precision: true
 
 ## OPTIMIZER params
 optimizer_class: Adam
@@ -81,6 +82,6 @@ sharing_strategy: file_descriptor
 #teacher_load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/teacher # E.g. .../outputs/09-01/09-58-50/
 #teacher_checkpoint_file: 03764544.pt # E.g. 05079552.pt
 
-load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
-checkpoint_file: 00434368_weights.pt
-weights_only: True
+#load_dir: /home/rick/IdeaProjects/Kaggle_Lux_AI_2021/
+#checkpoint_file: 00434368_weights.pt
+#weights_only: True
