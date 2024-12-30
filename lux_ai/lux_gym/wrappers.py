@@ -1,4 +1,7 @@
 import copy
+import logging
+import pickle
+
 import gym
 import numpy as np
 import torch
@@ -80,9 +83,43 @@ class PadFixedShapeEnv(gym.Wrapper):
         return self.observation(obs), reward, done, self.info(info)
 
     def step(self, action: Dict[str, np.ndarray]):
+
+        def save_obs(obs, filename="obs.pkl"):
+            """
+            Save the entire observation dict (with all array values printed) to a pickle file.
+            Also turn off print truncation for debugging prints.
+            """
+            # Turn off the default truncation in printing:
+            np.set_printoptions(threshold=np.inf)
+
+            # (Optional) If you just want to print the entire array in the console right now:
+            # print(obs)
+
+            # Now pickle and store the full data
+            with open(filename, "wb") as f:
+                pickle.dump(obs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Saved obs to {filename}")
+
+        # save_obs(action, "early_actions_in_wrapper.pkl")
+
+        assert action["worker"].shape[2] == action["worker"].shape[3]
+        assert action["cart"].shape[2] == action["cart"].shape[3]
+        assert action["city_tile"].shape[2] == action["city_tile"].shape[3]
+        # logging.warning("shape of early actions.cart: " + str(action["worker"].shape))
+
         action = {
-            key: val[..., :self.orig_board_dims[0], :self.orig_board_dims[1]] for key, val in action.items()
+            key: val[:, :, :self.orig_board_dims[0], :self.orig_board_dims[1], :]
+            for key, val in action.items()
         }
+
+        # logging.warning("self.orig_board_dims[0]: " + str(self.orig_board_dims[0]))
+        # logging.warning("self.orig_board_dims[1]: " + str(self.orig_board_dims[1]))
+        # logging.warning("shape of actions.cart: " + str(action["worker"].shape))
+
+        assert action["worker"].shape[2] == action["worker"].shape[3]
+        assert action["cart"].shape[2] == action["cart"].shape[3]
+        assert action["city_tile"].shape[2] == action["city_tile"].shape[3]
+
         obs, reward, done, info = super(PadFixedShapeEnv, self).step(action)
         return self.observation(obs), reward, done, self.info(info)
 

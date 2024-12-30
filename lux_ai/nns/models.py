@@ -114,6 +114,7 @@ class DictActor(nn.Module):
     @staticmethod
     @torch.no_grad()
     def logits_to_actions(logits: torch.Tensor, sample: bool, actions_per_square: Optional[int]) -> torch.Tensor:
+        # TODO: Need to understand how logits lookn and how they map to an action tensor.
         if actions_per_square is None:
             actions_per_square = logits.shape[-1]
         if sample:

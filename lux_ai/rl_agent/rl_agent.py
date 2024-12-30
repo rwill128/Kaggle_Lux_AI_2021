@@ -1,3 +1,5 @@
+import pickle
+
 import numpy as np
 import os
 from pathlib import Path
@@ -171,11 +173,32 @@ class RLAgent:
             - Tracks timing for observation processing, inference, collision detection
             - Adapts data augmentation based on remaining computation time
         """
+
+        def save_obs(obs, filename="obs.pkl"):
+            """
+            Save the entire observation dict (with all array values printed) to a pickle file.
+            Also turn off print truncation for debugging prints.
+            """
+            # Turn off the default truncation in printing:
+            np.set_printoptions(threshold=np.inf)
+
+            # (Optional) If you just want to print the entire array in the console right now:
+            # print(obs)
+
+            # Now pickle and store the full data
+            with open(filename, "wb") as f:
+                pickle.dump(obs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Saved obs to {filename}")
+
+
         self.stopwatch.reset()
 
         self.stopwatch.start("Observation processing")
         self.preprocess(obs, conf)
         env_output = self.get_env_output()
+
+        # save_obs(env_output, "env_output.pkl")
+
         relevant_env_output_augmented = {
             "obs": self.augment_data(env_output["obs"], is_policy=False),
             "info": {
@@ -186,9 +209,14 @@ class RLAgent:
             },
         }
 
+        # save_obs(relevant_env_output_augmented, "env_output_augmented.pkl")
+
         self.stopwatch.stop().start("Model inference")
         with torch.no_grad():
             agent_output_augmented = self.model.select_best_actions(relevant_env_output_augmented)
+
+            # save_obs(agent_output_augmented, "agent_output_augmented.pkl")
+
             agent_output = {
                 "policy_logits": self.aggregate_augmented_predictions(agent_output_augmented["policy_logits"]),
                 "baseline": agent_output_augmented["baseline"].mean(dim=0, keepdim=True).cpu()
@@ -201,6 +229,9 @@ class RLAgent:
                 ).view(*val.shape[:-1], -1)
                 for key, val in agent_output["policy_logits"].items()
             }
+
+            # save_obs(agent_output, "agent_output.pkl")
+
         # Used for debugging and visualization
         if raw_model_output:
             return agent_output
@@ -208,10 +239,11 @@ class RLAgent:
         self.stopwatch.stop().start("Collision detection")
         if self.agent_flags.use_collision_detection:
             actions = self.resolve_collision_detection(obs, agent_output)
+            # save_obs(actions, "actions_collision_detection.pkl")
         else:
-            actions, _ = self.unwrapped_env.process_actions({
-                key: value.squeeze(0).numpy() for key, value in agent_output["actions"].items()
-            })
+            items_ = {key: value.squeeze(0).numpy() for key, value in agent_output["actions"].items()}
+            # save_obs(items_, "actions_going_into_process_actions.pkl")
+            actions, _ = self.unwrapped_env.process_actions(items_)
             actions = actions[obs.player]
         self.stopwatch.stop()
 

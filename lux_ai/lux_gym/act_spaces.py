@@ -419,6 +419,31 @@ class BasicActionSpace(BaseActSpace):
             board_dims: Tuple[int, int],
             pos_to_unit_dict: Dict[Tuple, Optional[Unit]]
     ) -> Tuple[List[List[str]], Dict[str, np.ndarray]]:
+
+        def save_obs(obs, filename="obs.pkl"):
+            """
+            Save the entire observation dict (with all array values printed) to a pickle file.
+            Also turn off print truncation for debugging prints.
+            """
+            # Turn off the default truncation in printing:
+            np.set_printoptions(threshold=np.inf)
+
+            # (Optional) If you just want to print the entire array in the console right now:
+            # print(obs)
+
+            # Now pickle and store the full data
+            with open(filename, "wb") as f:
+                pickle.dump(obs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Saved obs to {filename}")
+
+        assert action_tensors_dict["worker"].shape[2] == action_tensors_dict["worker"].shape[3]
+        assert action_tensors_dict["cart"].shape[2] == action_tensors_dict["cart"].shape[3]
+        assert action_tensors_dict["city_tile"].shape[2] == action_tensors_dict["city_tile"].shape[3]
+
+        # save_obs(action_tensors_dict, "action_tensors.pkl")
+        # save_obs(pos_to_unit_dict, "pos_to_unit_dict.pkl")
+        # save_obs(game_state, "game_state.pkl")
+
         """
         1. Iterate over all players.
         2. For each player's units (worker, cart), get the action index from the action_tensors_dict.
@@ -543,6 +568,9 @@ class BasicActionSpace(BaseActSpace):
                         # None means no-op, but if not None, we add it to the commands.
                         if action is not None:
                             action_strs[p_id].append(action)
+
+        # save_obs(action_strs, "action_strings.pkl")
+        # save_obs(actions_taken, "actions_taken.pkl")
 
         return action_strs, actions_taken
 

@@ -44,6 +44,9 @@ References:
 """
 import logging
 import math
+import pickle
+
+import numpy as np
 from omegaconf import OmegaConf
 import os
 from pathlib import Path
@@ -450,10 +453,29 @@ def act(
         else:
             env.seed()
 
+        def save_obs(obs, filename="obs.pkl"):
+            """
+            Save the entire observation dict (with all array values printed) to a pickle file.
+            Also turn off print truncation for debugging prints.
+            """
+            # Turn off the default truncation in printing:
+            np.set_printoptions(threshold=np.inf)
+
+            # (Optional) If you just want to print the entire array in the console right now:
+            # print(obs)
+
+            # Now pickle and store the full data
+            with open(filename, "wb") as f:
+                pickle.dump(obs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Saved obs to {filename}")
+
+
         # Initial environment reset
         env_output = env.reset(force=True)
         # Initial forward pass to get first actions
         agent_output = actor_model(env_output)
+
+
 
         while True:
             # Get a free buffer index from free_queue
@@ -472,8 +494,18 @@ def act(
                 agent_output = actor_model(env_output)
                 timings.time("model")
 
+                # save_obs(agent_output, "monobeat_train_loop_agent_output.pkl")
+
                 # Step the environment with the chosen actions
                 env_output = env.step(agent_output["actions"])
+
+                # save_obs(env_output, "monobeat_train_loop_env_output.pkl")
+
+                # logging.warning("reward: " +str(env_output["reward"][0]))
+                #
+                # if (max(env_output["reward"][0]) > .01):
+                #     assert False
+
                 if env_output["done"].any():
                     # Some episodes ended. We store the final transitions, then reset
                     cached_reward = env_output["reward"]

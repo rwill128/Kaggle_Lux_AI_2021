@@ -31,14 +31,14 @@ reward_space_kwargs:
 ## TRAINING params
 total_steps: 2e7
 num_actors: 2
-n_actor_envs: 20
+n_actor_envs: 16
 unroll_length: 16
-batch_size: 40
+batch_size: 4
 discounting: 0.999
 
 ## MODEL params
 model_arch: conv_model
-n_blocks: 24
+n_blocks: 8
 hidden_dim: 128
 embedding_dim: 32
 n_merge_layers: 1
