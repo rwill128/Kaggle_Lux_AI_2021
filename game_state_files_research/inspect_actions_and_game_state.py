@@ -29,7 +29,8 @@ def visualize(action_tensors_dict,
               monobeat_train_loop_env_output_dict,
               pos_to_unit_dict,
               unprocessed_actions_dict,
-              early_actions_in_wrapper_dict):
+              early_actions_in_wrapper_dict,
+              available_actions_mask_dict):
     """
     Loops over each item in 'board_dict'. If it's a NumPy array with
     dimensionality >= 2, we visualize it.
@@ -99,7 +100,8 @@ def load_and_plot(action_tensors,
                   monobeat_train_loop_env_output,
                   pos_to_unit,
                   unprocessed_actions,
-                  early_actions_in_wrapper):
+                  early_actions_in_wrapper,
+                  available_actions_mask):
     """
     Load board dictionary from 'filename' and call visualize_board_dict.
     """
@@ -121,6 +123,8 @@ def load_and_plot(action_tensors,
         unprocessed_actions_dict = pickle.load(f)
     with open(early_actions_in_wrapper, "rb") as f:
         early_actions_in_wrapper_dict = pickle.load(f)
+    with open(available_actions_mask, "rb") as f:
+        available_actions_mask_dict = pickle.load(f)
 
 
     print(f"Loaded action_tensors dict from {action_tensors}")
@@ -132,7 +136,8 @@ def load_and_plot(action_tensors,
               monobeat_train_loop_env_output_dict,
               pos_to_unit_dict,
               unprocessed_actions_dict,
-              early_actions_in_wrapper_dict)
+              early_actions_in_wrapper_dict,
+              available_actions_mask_dict)
 
 
 if __name__ == "__main__":
@@ -146,7 +151,8 @@ if __name__ == "__main__":
               "<path_to_monobeat_train_loop_env_output.pkl> "
               "<path_to_pos_to_unit_dict.pkl> "
               "<path_to_unprocessed_actions_file.pkl>"
-              "<path_to_early_actions_in_wrapper.pkl>")
+              "<path_to_early_actions_in_wrapper.pkl>"
+              "<path_to_available_actions_mask.pkl>")
         sys.exit(1)
     action_tensors = sys.argv[1]
     action_strings = sys.argv[2]
@@ -157,6 +163,7 @@ if __name__ == "__main__":
     pos_to_unit_dict = sys.argv[7]
     unprocessed_actions = sys.argv[8]
     early_actions_in_wrapper = sys.argv[9]
+    available_actions_mask = sys.argv[10]
     load_and_plot(action_tensors,
                   action_strings,
                   actions_taken,
@@ -165,5 +172,6 @@ if __name__ == "__main__":
                   monobeat_train_loop_env_output,
                   pos_to_unit_dict,
                   unprocessed_actions,
-                  early_actions_in_wrapper)
+                  early_actions_in_wrapper,
+                  available_actions_mask)
 

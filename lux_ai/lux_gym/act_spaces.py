@@ -497,6 +497,8 @@ class BasicActionSpace(BaseActSpace):
             key: np.zeros(space, dtype=bool) for key, space in self.get_action_space_expanded_shape(board_dims).items()
         }
 
+        # save_obs(actions_taken, "actions_taken.pkl")
+
         for player in game_state.players:
             p_id = player.team
 
@@ -785,6 +787,15 @@ class BasicActionSpace(BaseActSpace):
                             ACTION_MEANINGS_TO_IDX["city_tile"]["BUILD_CART"]
                             ] = False
 
+        def save_board(board_dict, filename="board.pkl"):
+            """
+            Saves the observation dictionary (with NumPy arrays) to disk using pickle.
+            """
+            with open(filename, "wb") as f:
+                pickle.dump(board_dict, f)
+            print(f"Saved actions taken to {filename}.")
+
+        # save_board(available_actions_mask, filename="available_actions_mask.pkl")
 
         return available_actions_mask
 

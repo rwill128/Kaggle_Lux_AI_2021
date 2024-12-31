@@ -282,8 +282,6 @@ class LuxEnv(gym.Env):
 
     def process_actions(self, action: Dict[str, np.ndarray]) -> Tuple[List[List[str]], Dict[str, np.ndarray]]:
         #logging.warning("[LuxEnv process_actions] Processing action dict keys: %s", list(action.keys()))
-        print(action["worker"].shape[2])
-        print(action["worker"].shape[3])
         assert action["worker"].shape[2] == action["worker"].shape[3]
         assert action["cart"].shape[2] == action["cart"].shape[3]
         assert action["city_tile"].shape[2] == action["city_tile"].shape[3]

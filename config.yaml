@@ -9,7 +9,7 @@ hydra:
 
 ## WANDB params
 # The wandb project name
-name: testing_logging_changes
+name: local_32_block_4_batch
 project: lux-ai-s1
 # The wandb user to log to
 entity: rwill128
@@ -55,7 +55,7 @@ use_mixed_precision: true
 ## OPTIMIZER params
 optimizer_class: Adam
 optimizer_kwargs:
-  lr: 1e-6
+  lr: 1e-4
   # See https://arxiv.org/pdf/2105.05246.pdf
   eps: 0.0003
   #alpha: 0.9
